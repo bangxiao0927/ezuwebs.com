@@ -105,6 +105,21 @@ Current tests cover the replacement-prompt and replacement-structure helpers use
 
 ## Current Architecture
 
+### Data Flow
+
+```mermaid
+graph TD
+  User[User / Web App] -->|interactive edit request| Agent[Agent App]
+  Agent -->|prompt| Gateway[Model Gateway]
+  Gateway -->|stream plan| Agent
+  Agent -->|AgentEvent stream| Core[Core / Session Reducer]
+  Core -->|SessionState| UI[UI / Workbench VM]
+  UI -->|render| Browser[Browser]
+  Agent -->|action| Runtime[Browser Runtime Stub]
+  Runtime -->|file / preview events| Agent
+  Runtime -->|preview blob| Browser
+```
+
 ### Event protocol
 
 `@ezu/protocol` defines the shared language between the agent, runtime, and UI:
@@ -265,6 +280,21 @@ pnpm test
 当前测试主要覆盖 block-edit demo 相关的 replacement prompt 和 replacement structure 辅助逻辑。
 
 ## 当前架构
+
+### 数据流
+
+```mermaid
+graph TD
+  User[用户 / Web 应用] -->|交互式编辑请求| Agent[Agent 应用]
+  Agent -->|提示词| Gateway[模型网关]
+  Gateway -->|流式计划| Agent
+  Agent -->|AgentEvent 流| Core[核心 / 会话归并]
+  Core -->|SessionState| UI[UI / 工作台视图模型]
+  UI -->|渲染| Browser[浏览器]
+  Agent -->|动作| Runtime[浏览器运行时 Stub]
+  Runtime -->|文件 / 预览事件| Agent
+  Runtime -->|预览 blob| Browser
+```
 
 ### 事件协议
 
