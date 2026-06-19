@@ -831,6 +831,7 @@ function renderSessionLauncher(): string {
           <p class="launcher-meta">
             Make your own websites easier.
           </p>
+          <p class="launcher-shortcut-hint">Press <kbd>⌘K</kbd> or <kbd>Ctrl+K</kbd> to open the command palette.</p>
           <div class="launcher-actions">
             <button class="launcher-button launcher-button-primary" data-open-session="club-promo" type="button">Open Demo Session</button>
             <button class="launcher-button" data-open-session="agency-redesign" type="button">Open Agency Session</button>
@@ -958,14 +959,31 @@ function attachLauncherStyles(): void {
       margin: 0;
     }
 
-    .launcher-meta {
-      color: var(--launcher-meta);
-      line-height: 1.3;
-      margin: 0;
-    }
-    .launcher-actions,
-    .launcher-card-meta,
-    .launcher-card-head {
+   .launcher-meta {
+     color: var(--launcher-meta);
+     line-height: 1.3;
+     margin: 0;
+   }
+
+   .launcher-shortcut-hint {
+     margin: 0;
+     font-size: 0.82rem;
+     color: var(--launcher-muted);
+     opacity: 0.8;
+   }
+
+   .launcher-shortcut-hint kbd {
+     padding: 1px 6px;
+     border-radius: 5px;
+     border: 1px solid var(--launcher-border);
+     background: rgba(255, 255, 255, 0.08);
+     font-family: inherit;
+     font-size: 0.78rem;
+   }
+
+   .launcher-actions,
+   .launcher-card-meta,
+   .launcher-card-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
