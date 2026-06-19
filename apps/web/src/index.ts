@@ -556,7 +556,9 @@ function renderPreviewSelection(state: InteractiveWebEditorState, previewUrl?: s
 
 function renderDiffPanel(workbench: WorkbenchViewModel): string {
   if (!workbench.selectedDiffAction) {
-    return `<div class="empty-state">No patch action available yet</div>`;
+    return `<div class="empty-state dark-empty">
+      Select a patch action from the timeline to inspect its diff here.
+    </div>`;
   }
 
   const approvalActions =
