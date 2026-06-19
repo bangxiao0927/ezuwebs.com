@@ -258,6 +258,7 @@ export function createPlanStep(input: {
   description?: string;
   status?: PlanStep["status"];
   requiresApproval?: boolean;
+  tags?: string[];
 }): PlanStep {
   return {
     id: input.id ?? crypto.randomUUID(),
@@ -267,6 +268,7 @@ export function createPlanStep(input: {
     ...(input.requiresApproval !== undefined
       ? { requiresApproval: input.requiresApproval }
       : {}),
+    ...(input.tags?.length ? { tags: input.tags } : {}),
   };
 }
 

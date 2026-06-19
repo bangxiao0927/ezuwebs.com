@@ -31,6 +31,7 @@ export const planStepSchema = z.object({
   description: z.string().optional(),
   status: planStepStatusSchema,
   requiresApproval: z.boolean().optional(),
+  tags: z.array(z.string()).optional(),
 });
 export type PlanStep = z.infer<typeof planStepSchema>;
 
