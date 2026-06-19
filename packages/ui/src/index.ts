@@ -4,13 +4,14 @@ export type WorkspacePanel =
   | "InteractionPanel"
   | "ActionTimeline"
   | "FileTree"
-  | "EditorPanel"
-  | "TerminalPanel"
-  | "PreviewPanel"
-  | "DiffPanel";
+ | "EditorPanel"
+ | "TerminalPanel"
+ | "PreviewPanel"
+  | "DiffPanel"
+  | "SettingsPanel";
 
-export const centerWorkspacePanels: WorkspacePanel[] = [
-  "ChatPanel",
+ export const centerWorkspacePanels: WorkspacePanel[] = [
+   "ChatPanel",
   "PlanPanel",
   "InteractionPanel",
   "ActionTimeline",
@@ -20,11 +21,15 @@ export const rightWorkbenchPanels: WorkspacePanel[] = [
   "FileTree",
   "EditorPanel",
   "TerminalPanel",
-  "PreviewPanel",
-  "DiffPanel",
-];
+   "PreviewPanel",
+   "DiffPanel",
+ ];
+ 
+ export const bottomWorkbenchPanels: WorkspacePanel[] = [
+   "SettingsPanel",
+ ];
 
-export const workspacePanelLabels: Record<WorkspacePanel, string> = {
+ export const workspacePanelLabels: Record<WorkspacePanel, string> = {
   ChatPanel: "Chat",
   PlanPanel: "Plan",
   InteractionPanel: "Interaction",
@@ -32,6 +37,7 @@ export const workspacePanelLabels: Record<WorkspacePanel, string> = {
   FileTree: "Files",
   EditorPanel: "Editor",
   TerminalPanel: "Terminal",
-  PreviewPanel: "Preview",
-  DiffPanel: "Diff",
-};
+   PreviewPanel: "Preview",
+   DiffPanel: "Diff",
+   SettingsPanel: "Settings",
+ };
