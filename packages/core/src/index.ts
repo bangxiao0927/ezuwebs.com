@@ -286,7 +286,11 @@ export function createTimelineAction(input: {
 }
 
 export interface Executor {
-  enqueue(action: ActionState): Promise<ActionState>;
+  enqueue(action: ActionState, opts?: ExecutorEnqueueOptions): Promise<ActionState>;
+}
+
+export interface ExecutorEnqueueOptions {
+  maxRetries?: number;
 }
 
 export function createExecutor(input: {
@@ -294,31 +298,47 @@ export function createExecutor(input: {
   sessionStore: SessionStore;
 }): Executor {
   return {
-    async enqueue(action) {
+    async enqueue(action, opts) {
       const timestamp = new Date().toISOString();
+      const maxRetries = opts?.maxRetries ?? 1;
+      let lastError: unknown;
 
-      if (action.action.type === "file.write") {
-        await input.runtime.writeFile(action.action.path, action.action.content);
-      }
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          if (action.action.type === "file.write") {
+            await input.runtime.writeFile(action.action.path, action.action.content);
+          }
 
-      if (action.action.type === "file.patch") {
-        await input.runtime.patchFile(action.action.path, action.action.patch);
-      }
+          if (action.action.type === "file.patch") {
+            await input.runtime.patchFile(action.action.path, action.action.patch);
+          }
 
-      if (action.action.type === "command.run") {
-        await input.runtime.runCommand(
-          action.action.command,
-          action.action.cwd ? { cwd: action.action.cwd } : undefined,
-        );
-      }
+          if (action.action.type === "command.run") {
+            await input.runtime.runCommand(
+              action.action.command,
+              action.action.cwd ? { cwd: action.action.cwd } : undefined,
+            );
+          }
 
-      if (action.action.type === "preview.open") {
-        await input.runtime.openPreview(action.action.port);
+          if (action.action.type === "preview.open") {
+            await input.runtime.openPreview(action.action.port);
+          }
+
+          return {
+            ...action,
+            status: "completed",
+            updatedAt: timestamp,
+          };
+        } catch (error) {
+          lastError = error;
+          if (attempt < maxRetries) continue;
+        }
       }
 
       return {
         ...action,
-        status: "completed",
+        status: "failed",
+        error: String(lastError),
         updatedAt: timestamp,
       };
     },
