@@ -470,6 +470,12 @@ export class BrowserRuntimeStub implements RuntimeAdapter {
     return [...this.files.keys()].filter((path) => path.startsWith(root)).sort();
   }
 
+  async deleteFile(path: string): Promise<void> {
+    this.files.delete(path);
+    this.emitFileEvent({ path, type: "delete" });
+    this.refreshOpenPreviews();
+  }
+
   async runCommand(command: string, opts?: { cwd?: string }): Promise<RuntimeProcess> {
     const process = new BrowserRuntimeProcess();
 

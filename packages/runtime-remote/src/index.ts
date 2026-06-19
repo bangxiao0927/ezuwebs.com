@@ -20,6 +20,7 @@ export function createRemoteRuntimeStub(config: RemoteRuntimeConfig): RuntimeAda
     writeFile: async () => notImplemented(),
     patchFile: async () => notImplemented(),
     listFiles: async () => notImplemented(),
+    deleteFile: async () => notImplemented(),
     runCommand: async () => notImplemented() as Promise<RuntimeProcess>,
     openPreview: async () => notImplemented() as Promise<RuntimePort>,
     watchFiles: async () => notImplemented() as Promise<() => void>,

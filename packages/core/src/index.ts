@@ -22,6 +22,7 @@ export interface RuntimeAdapter {
   writeFile(path: string, content: string): Promise<void>;
   patchFile(path: string, patch: string): Promise<void>;
   listFiles(root: string): Promise<string[]>;
+  deleteFile(path: string): Promise<void>;
   runCommand(command: string, opts?: { cwd?: string }): Promise<RuntimeProcess>;
   openPreview(port?: number): Promise<RuntimePort>;
   watchFiles(cb: (event: { path: string; type: string }) => void): Promise<() => void>;
