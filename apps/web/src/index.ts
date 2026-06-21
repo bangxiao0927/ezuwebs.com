@@ -682,7 +682,7 @@ function renderSessionTerminal(workbench: WorkbenchViewModel): string {
     "~/project $",
   ];
 
-  return lines
+  const body = lines
     .map((line, index) => {
       if (index === 0) {
         return `<p><span class="terminal-dot"></span> ${escapeHtml(line)}</p>`;
@@ -695,6 +695,16 @@ function renderSessionTerminal(workbench: WorkbenchViewModel): string {
       return `<p>${escapeHtml(line)}</p>`;
     })
     .join("");
+
+  return `
+    <div class="terminal">
+      <div class="terminal-tabs">
+        <span class="terminal-tab active">Output</span>
+        <span class="terminal-tab-clear">clear</span>
+      </div>
+      <div class="terminal-body">${body}</div>
+    </div>
+  `;
 }
 
 function renderSessionPreview(
@@ -1990,6 +2000,16 @@ export const webAppStyles = `
   .terminal-tab.active {
     color: var(--text);
     background: rgba(255, 255, 255, 0.06);
+  }
+
+  .terminal-tab-clear {
+    margin-left: auto;
+    padding: 2px 8px;
+    border-radius: 5px;
+    color: var(--muted);
+    font-size: 0.75rem;
+    opacity: 0.5;
+    cursor: default;
   }
 
   .terminal-body {
