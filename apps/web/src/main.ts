@@ -1017,6 +1017,7 @@ function attachLauncherStyles(): void {
       transition:
         transform 180ms ease,
         border-color 180ms ease,
+        box-shadow 180ms ease,
         background 180ms ease;
     }
 
@@ -1062,6 +1063,7 @@ function attachLauncherStyles(): void {
     .launcher-card:hover {
       border-color: rgba(124, 196, 255, 0.28);
       transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
     }
 
     .launcher-button:hover {
