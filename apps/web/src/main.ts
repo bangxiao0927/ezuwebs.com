@@ -835,6 +835,7 @@ function renderSessionLauncher(): string {
           <div class="launcher-actions">
             <button class="launcher-button launcher-button-primary" data-open-session="club-promo" type="button">Open Demo Session</button>
             <button class="launcher-button" data-open-session="agency-redesign" type="button">Open Agency Session</button>
+            <button class="launcher-button" data-open-session="portfolio-dash" type="button">Open Portfolio Dashboard</button>
           </div>
         </div>
       </section>

@@ -77,6 +77,34 @@ const demoSessions: DemoSessionDefinition[] = [
       },
     ],
   },
+  {
+    id: "portfolio-dash",
+    title: "Portfolio Dashboard",
+    projectName: "Personal Portfolio Tracker",
+    description:
+      "一个轻量的个人作品集仪表盘，展示项目卡片、技能标签和实时预览面板。",
+    taskTitle: "Build Portfolio Dashboard Workspace",
+    taskTimestamp: "Version 1 at Mar 28 11:42 AM",
+    intent:
+      "Create a clean dashboard layout with project cards, a skill tag cloud, and a live preview panel that reflects edits in real time.",
+    properties: [
+      {
+        key: "headline",
+        label: "Headline",
+        value: "My Portfolio",
+      },
+      {
+        key: "status_focus",
+        label: "Status Focus",
+        value: "Dashboard + preview",
+      },
+      {
+        key: "style",
+        label: "Style",
+        value: "Clean minimal light",
+      },
+    ],
+  },
 ];
 
 export function listDemoSessions(): DemoSessionDefinition[] {
