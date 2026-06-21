@@ -123,6 +123,7 @@ export const runtimePortSchema = z.object({
   port: z.number().int().positive(),
   url: z.string(),
   status: z.enum(["open", "close"]),
+  description: z.string().optional(),
 });
 export type RuntimePort = z.infer<typeof runtimePortSchema>;
 
