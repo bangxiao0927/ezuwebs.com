@@ -32,6 +32,7 @@ This makes the repo useful as a foundation for experimenting with AI workspace a
 
 - `apps/web`
   Vite-powered frontend for the workspace demo. It renders the session shell, interactive block editor state, action timeline, file list, and preview surfaces.
+  A built-in terminal panel surfaces session status, file sync events, and preview URLs.
 
 - `apps/agent`
   Demo agent flow that bootstraps block-edit sessions, generates file patch actions, requests approval, and replays preview events.
@@ -208,6 +209,7 @@ Design and architecture notes are kept under `docs/txt/`. They are useful for un
 
 - `apps/web`
   基于 Vite 的前端演示应用。负责渲染会话工作台、交互式 block 编辑状态、动作时间线、文件列表和预览区域。
+  内置的终端面板会展示会话状态、文件同步事件和预览地址。
 
 - `apps/agent`
   Demo agent 流程。负责初始化 block 编辑会话、生成文件 patch 动作、请求审批，并回放预览事件。
