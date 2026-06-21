@@ -40,3 +40,11 @@ test("createReplacementStructurePatch changes output based on rejection reason",
   assert.match(copyPatch, /Rewrite visible strings so the replacement explains the intended action more directly\./);
   assert.match(copyPatch, /<section class=\\"replacement-messageStrip\\">MessageStrip<\/section>/);
 });
+
+test("createReplacementStructurePatch handles empty rejection reason gracefully", () => {
+  const patch = createReplacementStructurePatch(createOptions(""), "gpt-test");
+
+  assert.match(patch, /blockId: 'hero'/);
+  assert.match(patch, /strategy: 'replace_structure'/);
+  assert.match(patch, /Restructure the block around the rejection reason/);
+});
