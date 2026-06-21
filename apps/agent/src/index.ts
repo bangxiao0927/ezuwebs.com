@@ -436,6 +436,21 @@ export async function bootstrapAgentApp(options: AgentAppOptions): Promise<Agent
   events.push(coderProfileCompletedEvent);
   session = applyAgentEvent(session, coderProfileCompletedEvent);
 
+  const summaryProfileEvent: AgentEvent = {
+    type: "message.delta",
+    messageId: "bootstrap-profile-summary",
+    text: `Summary profile: ${gateway.getProfile().summary.model}`,
+  };
+  events.push(summaryProfileEvent);
+  session = applyAgentEvent(session, summaryProfileEvent);
+
+  const summaryProfileCompletedEvent: AgentEvent = {
+    type: "message.completed",
+    messageId: "bootstrap-profile-summary",
+  };
+  events.push(summaryProfileCompletedEvent);
+  session = applyAgentEvent(session, summaryProfileCompletedEvent);
+
   sessionStore.upsert(session);
   stopBridging();
 
