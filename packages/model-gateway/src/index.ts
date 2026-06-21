@@ -53,7 +53,7 @@ export function createModelGateway(profile: ModelProfile = defaultModelProfile):
       yield {
         type: "message.delta",
         messageId,
-        text: "I am outlining the first-pass workspace initialization flow.",
+        text: "I am outlining the first-pass workspace initialization flow (3 steps).",
       };
       yield {
         type: "message.delta",
