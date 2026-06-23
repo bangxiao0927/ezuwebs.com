@@ -10,10 +10,15 @@
     "dev:agent": "pnpm --filter @ezu/agent dev",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm build && node --test \"apps/agent/dist/apps/agent/src/index.test.js\" \"apps/web/dist/apps/web/src/index.test.js\""
+    "test": "pnpm build && node --test \"apps/agent/dist/apps/agent/src/index.test.js\" \"apps/web/dist/apps/web/src/index.test.js\"",
+    "db:generate": "pnpm --filter @ezu/db db:generate",
+    "db:migrate": "pnpm --filter @ezu/db db:migrate"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.8.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
   }
 }

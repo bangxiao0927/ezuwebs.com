@@ -36,6 +36,10 @@ export interface WebAppBootstrap {
   previewCanGoBack?: boolean;
   previewCanGoForward?: boolean;
   previewLoading?: boolean;
+  sidebarCollapsed?: boolean;
+  expandedDirectories?: string[];
+  /** Active model label for the session composer (UI state). */
+  selectedModel?: string;
 }
 
 export type ViewMode = "preview" | "code" | "diff";
@@ -759,20 +763,144 @@ function renderSessionPreview(
   `;
 }
 
-function renderSelectedFileCode(filePath: string, content: string): string {
-  return `
-    <div class="stack">
-      <div class="card diff-header">
-        <p class="eyebrow">Selected File</p>
-        <h3>${escapeHtml(filePath)}</h3>
-        <p>Code view for the current file selection.</p>
-      </div>
-      <div class="card code-block">
-        <p class="eyebrow">Source</p>
-        ${renderEditorCode(content)}
-      </div>
-    </div>
-  `;
+type FileTreeNode = {
+  name: string;
+  path: string;
+  children: Map<string, FileTreeNode>;
+  isFile: boolean;
+};
+
+type FileTreeRenderState = {
+  activeFile: string;
+  expandedDirectories: Set<string>;
+};
+
+function createFileTree(paths: string[]): FileTreeNode {
+  const root: FileTreeNode = {
+    name: "",
+    path: "",
+    children: new Map(),
+    isFile: false,
+  };
+
+  for (const filePath of paths) {
+    const segments = filePath.split("/").filter(Boolean);
+    let current = root;
+
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index]!;
+      const nextPath = current.path ? `${current.path}/${segment}` : segment;
+      const isFile = index === segments.length - 1;
+      const existing = current.children.get(segment);
+
+      if (existing) {
+        if (isFile) {
+          existing.isFile = true;
+        }
+        current = existing;
+        continue;
+      }
+
+      const node: FileTreeNode = {
+        name: segment,
+        path: nextPath,
+        children: new Map(),
+        isFile,
+      };
+      current.children.set(segment, node);
+      current = node;
+    }
+  }
+
+  return root;
+}
+
+function sortFileTreeNodes(nodes: FileTreeNode[]): FileTreeNode[] {
+  return [...nodes].sort((left, right) => {
+    if (left.isFile !== right.isFile) {
+      return left.isFile ? 1 : -1;
+    }
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function getAncestorDirectories(filePath: string): string[] {
+  const segments = filePath.split("/").filter(Boolean);
+  const directories: string[] = [];
+
+  for (let index = 0; index < Math.max(0, segments.length - 1); index += 1) {
+    directories.push(segments.slice(0, index + 1).join("/"));
+  }
+
+  return directories;
+}
+
+function normalizeExpandedDirectories(
+  activeFile: string,
+  expandedDirectories?: Iterable<string>,
+): Set<string> {
+  if (expandedDirectories) {
+    return new Set(expandedDirectories);
+  }
+
+  return new Set(getAncestorDirectories(activeFile));
+}
+
+function renderFileTreeNodes(nodes: FileTreeNode[], state: FileTreeRenderState, depth = 0): string {
+  return sortFileTreeNodes(nodes)
+    .map((node) => {
+      if (node.isFile) {
+        return `
+          <button
+            type="button"
+            class="file-entry ${node.path === state.activeFile ? "file-entry-active" : ""}"
+            data-file-path="${escapeHtml(node.path)}"
+            style="--tree-depth:${String(depth)}"
+            title="${escapeHtml(node.path)}"
+          >
+            <span class="file-entry-icon">≡</span>
+            <span class="file-entry-label">${escapeHtml(node.name)}</span>
+          </button>
+        `;
+      }
+
+      const isExpanded = state.expandedDirectories.has(node.path);
+
+      return `
+        <div class="tree-group" style="--tree-depth:${String(depth)}" data-tree-path="${escapeHtml(node.path)}">
+          <button
+            type="button"
+            class="tree-group-label"
+            data-directory-path="${escapeHtml(node.path)}"
+            aria-expanded="${isExpanded ? "true" : "false"}"
+            title="${escapeHtml(node.path)}"
+          >
+            <span class="tree-group-caret">${isExpanded ? "▾" : "▸"}</span>
+            <span class="tree-group-name">${escapeHtml(node.name)}</span>
+          </button>
+          <div class="tree-group-children ${isExpanded ? "" : "tree-group-children-collapsed"}">
+            ${renderFileTreeNodes([...node.children.values()], state, depth + 1)}
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderWorkspaceFileTree(
+  paths: string[],
+  activeFile: string,
+  expandedDirectories?: Iterable<string>,
+): string {
+  const root = createFileTree(paths);
+  return renderFileTreeNodes([...root.children.values()], {
+    activeFile,
+    expandedDirectories: normalizeExpandedDirectories(activeFile, expandedDirectories),
+  });
+}
+
+function renderSelectedFileCode(_filePath: string, content: string): string {
+  return renderEditorCode(content);
 }
 
 function renderModelOutput(workbench: WorkbenchViewModel): string {
@@ -1094,7 +1222,7 @@ export const webAppStyles = `
 
   .preview-shell {
     display: grid;
-    grid-template-columns: minmax(280px, 0.32fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 0.32fr);
     min-height: 0;
     background: var(--panel-3);
   }
@@ -1103,20 +1231,26 @@ export const webAppStyles = `
     display: grid;
     grid-template-rows: auto 1fr;
     min-height: 0;
-    border-right: 1px solid var(--line);
-    background: rgba(11, 17, 29, 0.94);
+    border-left: 1px solid var(--line);
+    background: #181818;
+    min-width: 0;
+    overflow: hidden;
+    transition:
+      border-color 180ms ease,
+      background 180ms ease,
+      opacity 180ms ease;
   }
 
   .workbench-sidebar-header {
-    padding: 10px 12px 8px;
+    padding: 8px 12px 10px;
     border-bottom: 1px solid var(--line);
     display: grid;
-    gap: 8px;
+    gap: 6px;
   }
 
   .workspace-path-form {
     display: grid;
-    gap: 6px;
+    gap: 4px;
     min-width: 0;
   }
 
@@ -1124,13 +1258,13 @@ export const webAppStyles = `
     width: 100%;
     min-width: 0;
     border: 0;
-    border-radius: 8px;
+    border-radius: 4px;
     padding: 6px 8px;
-    color: var(--text);
-    background: rgba(255, 255, 255, 0.03);
-    font-size: 0.86rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
+    color: #cccccc;
+    background: #252526;
+    font-size: 0.78rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-weight: 500;
     outline: none;
   }
 
@@ -1139,20 +1273,19 @@ export const webAppStyles = `
   }
 
   .workspace-path-input:focus {
-    background: rgba(124, 196, 255, 0.08);
-    box-shadow: inset 0 0 0 1px rgba(124, 196, 255, 0.28);
+    box-shadow: inset 0 0 0 1px #007acc;
   }
 
   .workbench-sidebar-body {
-    padding: 10px 8px;
+    padding: 0;
     overflow: auto;
     display: grid;
-    gap: 12px;
+    gap: 0;
   }
 
   .sidebar-section {
     display: grid;
-    gap: 10px;
+    gap: 0;
   }
 
   .sidebar-section-head {
@@ -1160,81 +1293,179 @@ export const webAppStyles = `
     align-items: center;
     justify-content: space-between;
     gap: 10px;
+    min-height: 30px;
+    padding: 0 12px;
+    background: #181818;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   }
 
   .sidebar-section-head strong {
-    color: var(--text);
-    font-size: 0.78rem;
+    color: #cccccc;
+    font-size: 0.72rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+    font-weight: 700;
   }
 
   .file-tree {
     display: grid;
-    gap: 2px;
+    gap: 0;
+    padding: 4px 0 8px;
+  }
+
+  .tree-group {
+    display: grid;
+  }
+
+  .tree-group-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    padding: 0 12px;
+    padding-left: calc(12px + var(--tree-depth, 0) * 14px);
+    color: #cccccc;
+    font-size: 0.78rem;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tree-group-label:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .tree-group-caret {
+    color: #8c8c8c;
+    font-size: 0.72rem;
+    flex: 0 0 auto;
+  }
+
+  .tree-group-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tree-group-children {
+    display: grid;
+  }
+
+  .tree-group-children-collapsed {
+    display: none;
   }
 
   .file-entry {
     width: 100%;
     text-align: left;
     border: 0;
-    border-radius: 8px;
-    padding: 6px 8px;
+    border-radius: 0;
+    padding: 4px 12px;
+    padding-left: calc(16px + var(--tree-depth, 0) * 14px);
     background: transparent;
-    color: var(--muted);
+    color: #cccccc;
     cursor: pointer;
-    font-size: 0.86rem;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  .file-entry:hover,
+  .file-entry:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
   .file-entry-active {
-    background: rgba(124, 196, 255, 0.08);
-    color: var(--text);
+    background: #37373d;
+    color: #ffffff;
+  }
+
+  .file-entry-icon {
+    color: #8c8c8c;
+    flex: 0 0 auto;
+    font-size: 0.7rem;
+  }
+
+  .file-entry-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .preview-topbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding: 8px 12px;
+    gap: 8px;
+    padding: 0 12px 0 0;
     border-bottom: 1px solid var(--line);
-    background: rgba(18, 21, 28, 0.96);
+    background: #181a1f;
   }
 
   .preview-topbar strong {
-    font-size: 0.88rem;
+    margin-left: auto;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .preview-topbar-actions {
+    margin-left: auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .sidebar-toggle {
+    border: 0;
+    border-left: 1px solid rgba(255, 255, 255, 0.04);
+    padding: 10px 12px 8px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+
+  .sidebar-toggle:hover {
     color: var(--text);
+    background: rgba(255, 255, 255, 0.03);
   }
 
   .preview-tabs {
     display: flex;
-    gap: 8px;
+    gap: 0;
   }
 
   .preview-tab {
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    padding: 6px 12px;
-    background: rgba(255, 255, 255, 0.03);
+    border: 0;
+    border-right: 1px solid rgba(255, 255, 255, 0.04);
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 10px 14px 8px;
+    background: transparent;
     color: var(--muted);
     cursor: pointer;
     font: inherit;
-    transition:
-      background 160ms ease,
-      border-color 160ms ease,
-      color 160ms ease;
-  }
-
-  .preview-tab:hover {
-    border-color: var(--line-strong);
-    color: var(--text);
+    font-size: 0.8rem;
   }
 
   .preview-tab-active {
-    background: var(--accent-soft);
+    background: rgba(255, 255, 255, 0.03);
     color: var(--text);
-    border-color: rgba(79, 140, 255, 0.5);
+    border-bottom-color: #3794ff;
   }
 
   .preview-body {
@@ -1254,6 +1485,21 @@ export const webAppStyles = `
     display: grid;
   }
 
+  .workspace-shell[data-sidebar-collapsed="true"] .preview-shell {
+    grid-template-columns: minmax(0, 1fr) 0;
+  }
+
+  .workspace-shell[data-sidebar-collapsed="true"] .workbench-sidebar {
+    border-left-color: transparent;
+    background: transparent;
+    opacity: 0;
+  }
+
+  .workspace-shell[data-sidebar-collapsed="true"] .workbench-sidebar-header,
+  .workspace-shell[data-sidebar-collapsed="true"] .workbench-sidebar-body {
+    visibility: hidden;
+  }
+
   .preview-panel,
   .code-panel {
     display: none;
@@ -1269,11 +1515,11 @@ export const webAppStyles = `
   }
 
   .preview-panel-review {
-    height: auto;
+    height: 100%;
     overflow: auto;
-    align-content: start;
-    padding: 16px;
-    background: #11161d;
+    align-content: stretch;
+    padding: 0;
+    background: #1e1e1e;
   }
 
   .eyebrow {
@@ -1546,7 +1792,7 @@ export const webAppStyles = `
   .prompt-input {
     margin-top: 12px;
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     gap: 10px;
     padding: 12px 14px;
     border: 1px solid var(--line);
@@ -1555,13 +1801,22 @@ export const webAppStyles = `
     color: var(--dim);
   }
 
-  .prompt-input input {
+  .prompt-input input,
+  .prompt-input textarea {
     flex: 1;
     min-width: 0;
     border: none;
     background: transparent;
     color: var(--text);
     outline: none;
+    font: inherit;
+    line-height: 1.45;
+  }
+
+  .prompt-input textarea {
+    resize: vertical;
+    min-height: 44px;
+    max-height: 200px;
   }
 
   .send-button,
@@ -1704,32 +1959,33 @@ export const webAppStyles = `
 
   .code-view {
     display: grid;
-    grid-template-columns: 56px minmax(0, 1fr);
-    min-height: 0;
+    grid-template-columns: 52px minmax(0, 1fr);
+    min-height: 100%;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    font-size: 0.9rem;
-    line-height: 1.8;
+    font-size: 0.84rem;
+    line-height: 1.6;
+    background: #1e1e1e;
   }
 
   .line-numbers,
   .code-lines {
     margin: 0;
-    padding: 16px 0;
+    padding: 10px 0 16px;
     list-style: none;
   }
 
   .line-numbers {
     text-align: right;
-    padding-right: 14px;
-    color: #5f6b7b;
-    border-right: 1px solid var(--line);
-    background: #11141b;
+    padding-right: 12px;
+    color: #858585;
+    border-right: 1px solid rgba(255, 255, 255, 0.04);
+    background: #1e1e1e;
   }
 
   .code-lines {
-    padding-left: 18px;
-    padding-right: 18px;
-    color: #d7deea;
+    padding-left: 12px;
+    padding-right: 16px;
+    color: #d4d4d4;
   }
 
   .code-line {
@@ -2052,7 +2308,7 @@ export const webAppStyles = `
     }
 
     .workbench-sidebar {
-      border-right: 0;
+      border-left: 0;
       border-bottom: 1px solid var(--line);
     }
 
@@ -2091,11 +2347,24 @@ export const webAppStyles = `
     .preview-topbar {
       flex-direction: column;
       align-items: flex-start;
+      padding: 0;
     }
 
     .preview-tabs {
       width: 100%;
       flex-wrap: wrap;
+    }
+
+    .preview-topbar-actions {
+      margin-left: 0;
+      width: 100%;
+      justify-content: space-between;
+      padding: 0 12px 10px;
+    }
+
+    .sidebar-toggle {
+      border-left: 0;
+      padding: 0;
     }
   }
 `;
@@ -2117,11 +2386,19 @@ export function renderWebAppBody(input: WebAppBootstrap): string {
     `// ${activeFile}\n\nNo file content is available for this workspace path yet.`;
   const viewMode: ViewMode = input.viewMode ?? "preview";
   const previewMode: PreviewMode = input.previewMode ?? "runtime";
+  const sidebarCollapsed = input.sidebarCollapsed ?? false;
+  const expandedDirectories = input.expandedDirectories;
   const workspaceRoot = input.workspaceRoot ?? ".";
+  const selectedModel = input.selectedModel ?? "gpt-4.1";
+  const modelOptions = ["gpt-4.1", "gpt-4.1-mini", "claude-3.5", "deepseek-r1"] as const;
 
   return `
     <main class="app-shell">
-      <div class="workspace-shell" data-view-mode="${escapeHtml(viewMode)}">
+      <div
+        class="workspace-shell"
+        data-view-mode="${escapeHtml(viewMode)}"
+        data-sidebar-collapsed="${sidebarCollapsed ? "true" : "false"}"
+      >
         <header class="workspace-topbar">
           <div class="topbar-left">
             <button class="brand-mark brand-home" data-go-home type="button" aria-label="Back to homepage">EZ</button>
@@ -2135,6 +2412,7 @@ export function renderWebAppBody(input: WebAppBootstrap): string {
             <button class="topbar-button" data-open-dialog="sessions" type="button">Sessions</button>
             <button class="topbar-button" data-open-dialog="share" type="button">Share</button>
             <button class="topbar-button topbar-button-primary" data-open-dialog="publish" type="button">Publish</button>
+            <button class="topbar-button" type="button" data-go-user-dashboard>User</button>
             <div class="avatar">E</div>
           </div>
         </header>
@@ -2149,11 +2427,16 @@ export function renderWebAppBody(input: WebAppBootstrap): string {
               </div>
               <div class="chat-tools">
                 <label class="meta" for="model-select">Model</label>
-                <select id="model-select" class="model-select">
-                  <option value="gpt-4.1">gpt-4.1</option>
-                  <option value="gpt-4.1-mini">gpt-4.1-mini</option>
-                  <option value="claude-3.5">claude-3.5</option>
-                  <option value="deepseek-r1">deepseek-r1</option>
+                <select id="model-select" class="model-select" data-model-select>
+                  ${modelOptions
+                    .map(
+                      (id) => `
+                    <option value="${escapeHtml(id)}" ${id === selectedModel ? "selected" : ""}>${escapeHtml(
+                      id,
+                    )}</option>
+                  `,
+                    )
+                    .join("")}
                 </select>
               </div>
             </div>
@@ -2166,11 +2449,11 @@ export function renderWebAppBody(input: WebAppBootstrap): string {
                 <div class="meta">How can we help you today? (or /command)</div>
                 <div class="prompt-input">
                   <span>+</span>
-                  <input
+                  <textarea
                     data-command-input
-                    value="${escapeHtml(input.composerText ?? "")}"
-                    placeholder="Ask to refine layout, preview, or patch flow"
-                  />
+                    rows="2"
+                    placeholder="Ask to refine layout, preview, or patch flow (Enter send · Shift+Enter newline)"
+                  >${escapeHtml(input.composerText ?? "")}</textarea>
                   <span>${escapeHtml(shell.topBar.runtimeType)}</span>
                   <button class="send-button" data-send-message type="button" aria-label="Send">↑</button>
                 </div>
@@ -2179,51 +2462,6 @@ export function renderWebAppBody(input: WebAppBootstrap): string {
           </aside>
 
           <section class="preview-shell">
-            <aside class="workbench-sidebar">
-              <div class="workbench-sidebar-header">
-                <form class="workspace-path-form" data-workspace-path-form>
-                  <p class="eyebrow">Workspace Path</p>
-                  <input
-                    class="workspace-path-input"
-                    data-workspace-path-input
-                    name="path"
-                    value="${escapeHtml(workspaceRoot)}"
-                    spellcheck="false"
-                    autocomplete="off"
-                  />
-                </form>
-              </div>
-              <div class="workbench-sidebar-body">
-                <section class="sidebar-section">
-                  <div class="sidebar-section-head">
-                    <strong>Filesystem</strong>
-                  </div>
-                  <div class="file-tree">
-                    ${uniqueFiles
-                      .map(
-                        (filePath) => `
-                          <button
-                            type="button"
-                            class="file-entry ${filePath === activeFile ? "file-entry-active" : ""}"
-                            data-file-path="${escapeHtml(filePath)}"
-                          >
-                            ${escapeHtml(filePath)}
-                          </button>
-                        `,
-                      )
-                      .join("")}
-                  </div>
-                </section>
-                <section class="sidebar-section">
-                  <div class="sidebar-section-head">
-                    <strong>Code</strong>
-                  </div>
-                  <div class="code-panel">
-                    ${renderEditorCode(activeFileContent)}
-                  </div>
-                </section>
-              </div>
-            </aside>
             <section class="preview-body">
               <div class="preview-topbar">
                 <div class="preview-tabs" role="tablist" aria-label="Workbench panel mode">
@@ -2242,7 +2480,17 @@ export function renderWebAppBody(input: WebAppBootstrap): string {
                     Code Review
                   </button>
                 </div>
-                <strong>${escapeHtml(activeFile)}</strong>
+                <div class="preview-topbar-actions">
+                  <strong>${escapeHtml(activeFile)}</strong>
+                  <button
+                    class="sidebar-toggle"
+                    data-sidebar-toggle
+                    type="button"
+                    aria-expanded="${sidebarCollapsed ? "false" : "true"}"
+                  >
+                    ${sidebarCollapsed ? "Show Sidebar" : "Hide Sidebar"}
+                  </button>
+                </div>
               </div>
               <div class="preview-panel ${previewMode === "runtime" ? "preview-panel-runtime" : "preview-panel-review"}">
                 ${
@@ -2259,11 +2507,63 @@ export function renderWebAppBody(input: WebAppBootstrap): string {
                         ...(typeof input.previewLoading === "boolean"
                           ? { loading: input.previewLoading }
                           : {}),
-                      })
+                  })
                     : renderSelectedFileCode(activeFile, activeFileContent)
                 }
               </div>
             </section>
+            <aside class="workbench-sidebar">
+              <div class="workbench-sidebar-header">
+                <form class="workspace-path-form" data-workspace-path-form>
+                  <p class="eyebrow">Workspace</p>
+                  <input
+                    class="workspace-path-input"
+                    data-workspace-path-input
+                    name="path"
+                    value="${escapeHtml(workspaceRoot)}"
+                    spellcheck="false"
+                    autocomplete="off"
+                  />
+                </form>
+              </div>
+              <div class="workbench-sidebar-body">
+                <section class="sidebar-section">
+                  <div class="sidebar-section-head">
+                    <strong>${escapeHtml(workspaceRoot)}</strong>
+                  </div>
+                  <div class="file-tree">
+                    ${renderWorkspaceFileTree(uniqueFiles, activeFile, expandedDirectories)}
+                  </div>
+                </section>
+                <section class="sidebar-section">
+                  <div class="sidebar-section-head">
+                    <strong>Utilities</strong>
+                  </div>
+                  <div class="file-tree">
+                    <button type="button" class="file-entry" data-util-action="copy-active-path">
+                      Copy active file path
+                    </button>
+                    <button type="button" class="file-entry" data-util-action="copy-active-content">
+                      Copy active file content
+                    </button>
+                    <button type="button" class="file-entry" data-util-action="copy-preview-url">
+                      Copy preview URL
+                    </button>
+                    <button type="button" class="file-entry" data-util-action="open-preview">
+                      Open preview in new tab
+                    </button>
+                  </div>
+                </section>
+                <section class="sidebar-section">
+                  <div class="sidebar-section-head">
+                    <strong>Code</strong>
+                  </div>
+                  <div class="code-panel">
+                    ${renderEditorCode(activeFileContent)}
+                  </div>
+                </section>
+              </div>
+            </aside>
           </section>
         </section>
       </div>

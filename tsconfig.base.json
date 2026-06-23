@@ -21,6 +21,9 @@
       "@ezu/core": [
         "packages/core/src/index.ts"
       ],
+      "@ezu/db": [
+        "packages/db/src/index.ts"
+      ],
       "@ezu/model-gateway": [
         "packages/model-gateway/src/index.ts"
       ],
