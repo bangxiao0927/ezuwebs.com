@@ -4,16 +4,24 @@
   "version": "0.1.0",
   "packageManager": "pnpm@10.6.1",
   "scripts": {
-    "dev": "pnpm --filter @ezu/web dev",
+    "dev": "concurrently -n server,web -c blue,green \"pnpm dev:server\" \"pnpm dev:web\"",
     "build": "pnpm -r build",
     "dev:web": "pnpm --filter @ezu/web dev",
+    "dev:server": "pnpm --filter @ezu/server dev",
     "dev:agent": "pnpm --filter @ezu/agent dev",
+    "start": "pnpm --filter @ezu/server start",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm build && node --test \"apps/agent/dist/apps/agent/src/index.test.js\" \"apps/web/dist/apps/web/src/index.test.js\""
+    "test": "pnpm --filter @ezu/agent build && node --test \"apps/agent/dist/apps/agent/src/index.test.js\" && pnpm --filter @ezu/server test"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "concurrently": "^9.1.0",
     "typescript": "^5.8.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

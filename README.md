@@ -30,9 +30,13 @@ This makes the repo useful as a foundation for experimenting with AI workspace a
 
 ### Apps
 
+The project uses a **decoupled frontend/backend architecture**: a Vue single-page app talks to a standalone HTTP API over JSON; the API owns the agent, session reduction, and runtime.
+
 - `apps/web`
-  Vite-powered frontend for the workspace demo. It renders the session shell, interactive block editor state, action timeline, file list, and preview surfaces.
-  A built-in terminal panel surfaces session status, file sync events, and preview URLs.
+  Vue 3 + Vite single-page frontend. It renders the session launcher and the workbench (conversation, plan, approvals, action timeline, file tree, block editor, preview, terminal). It holds no agent logic and reaches the backend through `/api`.
+
+- `apps/server`
+  Node HTTP backend (`@ezu/server`). It reuses `@ezu/agent`, `@ezu/core`, and `@ezu/protocol` to bootstrap sessions, run block-edit flows, reduce agent events into a workbench view model, and serve the JSON API consumed by the frontend.
 
 - `apps/agent`
   Demo agent flow that bootstraps block-edit sessions, generates file patch actions, requests approval, and replays preview events.
@@ -70,13 +74,21 @@ This makes the repo useful as a foundation for experimenting with AI workspace a
 pnpm install
 ```
 
-### Run the web demo
+### Run the full stack (frontend + backend)
 
 ```bash
 pnpm dev
 ```
 
-This starts the Vite app from `apps/web`.
+This starts the `@ezu/server` API (port `4175`) and the `@ezu/web` Vue dev server (port `4174`) together. The Vite dev server proxies `/api` to the backend, so open `http://127.0.0.1:4174`.
+
+Run them individually if needed:
+
+```bash
+pnpm dev:server   # @ezu/server API only
+pnpm dev:web      # @ezu/web Vue frontend only
+pnpm start        # run the backend API in production mode
+```
 
 ### Run the agent package in watch mode
 
@@ -104,21 +116,35 @@ pnpm test
 
 Current tests cover the replacement-prompt and replacement-structure helpers used by the block-edit demo flows.
 
+## HTTP API
+
+The backend exposes a small JSON API under `/api` (default `http://127.0.0.1:4175`):
+
+- `GET /api/sessions` — list demo session definitions.
+- `POST /api/sessions` — create a session instance from `{ "definitionId" }` and return its workbench view model.
+- `GET /api/sessions/:id` — fetch the current session view model.
+- `GET /api/sessions/:id/files` — fetch the workspace file snapshot.
+- `POST /api/sessions/:id/select-block` — select an editor block (`{ "blockId" }`).
+- `POST /api/sessions/:id/edit` — run a block edit (`{ "intent", "patchStrategy", "properties" }`); the agent produces a fresh patch and approval request.
+- `POST /api/sessions/:id/prompt` — queue a free-form prompt (`{ "text" }`).
+- `POST /api/sessions/:id/approval` — resolve the pending approval (`{ "decision", "reason" }`).
+
 ## Current Architecture
 
 ### Data Flow
 
 ```mermaid
 graph TD
-  User[User / Web App] -->|interactive edit request| Agent[Agent App]
+  Browser[Vue Frontend / apps/web] -->|HTTP JSON /api| Server[Backend API / apps/server]
+  Server -->|interactive edit request| Agent[Agent / @ezu/agent]
   Agent -->|prompt| Gateway[Model Gateway]
   Gateway -->|stream plan| Agent
   Agent -->|AgentEvent stream| Core[Core / Session Reducer]
-  Core -->|SessionState| UI[UI / Workbench VM]
-  UI -->|render| Browser[Browser]
-  Agent -->|action| Runtime[Browser Runtime Stub]
+  Core -->|SessionState| VM[Workbench View Model]
+  VM -->|JSON| Server
+  Agent -->|action| Runtime[Runtime Stub]
   Runtime -->|file / preview events| Agent
-  Runtime -->|preview blob| Browser
+  Server -->|view model + preview URL| Browser
 ```
 
 ### Event protocol
@@ -207,9 +233,13 @@ Design and architecture notes are kept under `docs/txt/`. They are useful for un
 
 ### Apps
 
+项目采用**前后端分离架构**：Vue 单页应用通过 JSON 与独立的 HTTP API 通信，后端负责 agent、会话归并与运行时。
+
 - `apps/web`
-  基于 Vite 的前端演示应用。负责渲染会话工作台、交互式 block 编辑状态、动作时间线、文件列表和预览区域。
-  内置的终端面板会展示会话状态、文件同步事件和预览地址。
+  Vue 3 + Vite 单页前端。负责渲染会话启动页和工作台（对话、计划、审批、动作时间线、文件树、block 编辑器、预览、终端）。前端不包含 agent 逻辑，全部通过 `/api` 调用后端。
+
+- `apps/server`
+  Node HTTP 后端（`@ezu/server`）。复用 `@ezu/agent`、`@ezu/core`、`@ezu/protocol` 来初始化会话、运行 block 编辑流程、把 agent 事件归并成工作台视图模型，并对外提供前端消费的 JSON API。
 
 - `apps/agent`
   Demo agent 流程。负责初始化 block 编辑会话、生成文件 patch 动作、请求审批，并回放预览事件。
@@ -247,13 +277,21 @@ Design and architecture notes are kept under `docs/txt/`. They are useful for un
 pnpm install
 ```
 
-### 启动 Web demo
+### 启动前后端
 
 ```bash
 pnpm dev
 ```
 
-这个命令会启动 `apps/web` 里的 Vite 应用。
+这个命令会同时启动 `@ezu/server` API（端口 `4175`）和 `@ezu/web` Vue 开发服务器（端口 `4174`）。Vite 会把 `/api` 代理到后端，打开 `http://127.0.0.1:4174` 即可。
+
+如需分别启动：
+
+```bash
+pnpm dev:server   # 仅后端 API
+pnpm dev:web      # 仅 Vue 前端
+pnpm start        # 以生产模式运行后端 API
+```
 
 ### 以 watch 模式启动 agent 包
 
