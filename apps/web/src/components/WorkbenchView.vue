@@ -172,14 +172,14 @@ async function handleApproval(decision: "approved" | "rejected"): Promise<void> 
       <WorkspaceColumn
         :view-model="viewModel"
         :files="files"
-        :busy="busy"
-        v-model:view-mode="viewMode"
-        v-model:active-file="activeFile"
-        v-model:intent="intent"
-        v-model:patch-strategy="patchStrategy"
-        :property-values="propertyValues"
-        :on-select-block="handleSelectBlock"
-        :on-submit-edit="handleSubmitEdit"
+       :busy="busy"
+       v-model:view-mode="viewMode"
+       v-model:active-file="activeFile"
+       v-model:intent="intent"
+       v-model:patch-strategy="patchStrategy"
+      v-model:property-values="propertyValues"
+       :on-select-block="handleSelectBlock"
+      :on-submit-edit="handleSubmitEdit"
       />
     </section>
 

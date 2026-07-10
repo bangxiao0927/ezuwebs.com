@@ -7,7 +7,6 @@ const props = defineProps<{
   viewModel: WorkbenchViewModel;
   files: WorkspaceFile[];
   busy: boolean;
-  propertyValues: Record<string, string>;
   onSelectBlock: (blockId: string) => void;
   onSubmitEdit: () => void;
 }>();
@@ -16,6 +15,8 @@ const viewMode = defineModel<"preview" | "code" | "diff">("viewMode", { required
 const activeFile = defineModel<string | undefined>("activeFile", { required: true });
 const intent = defineModel<string>("intent", { required: true });
 const patchStrategy = defineModel<PatchStrategy>("patchStrategy", { required: true });
+
+const propertyValues = defineModel<Record<string, string>>("propertyValues", { required: true });
 
 const editor = computed(() => props.viewModel.webEditor);
 const selectedBlockId = computed(() => editor.value.selectedBlockId);
@@ -99,7 +100,11 @@ const terminalLines = computed(() => {
         <div class="subgrid">
           <label v-for="property in editor.properties" :key="property.key" class="field">
             <span>{{ property.label }}</span>
-            <input v-model="propertyValues[property.key]" type="text" />
+            <input
+              :value="propertyValues[property.key]"
+              @input="propertyValues = { ...propertyValues, [property.key]: ($event.target as HTMLInputElement).value }"
+              type="text"
+            />
           </label>
         </div>
 
