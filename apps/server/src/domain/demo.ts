@@ -6,8 +6,8 @@ import {
   getWebEditorBlockFile,
   type InteractiveWebEditRequest,
   type WebAppBootstrap,
-} from "./index";
-import { getDefaultWorkspaceSnapshot } from "./workspace";
+} from "./view-model.js";
+import { getDefaultWorkspaceSnapshot } from "./workspace.js";
 
 export interface DemoSessionDefinition {
   id: string;

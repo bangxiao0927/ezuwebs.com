@@ -64,7 +64,7 @@ Examples:
 When editing docs:
 
 - `README.md` and repo overview docs should describe the current implementation
-- design notes under `docs/txt/` may describe future direction, but should say so clearly
+- design notes under `docs/design/` may describe future direction, but should say so clearly
 
 Do not present roadmap ideas as already implemented behavior.
 
@@ -96,8 +96,8 @@ Use these boundaries when describing your changes:
 - `packages/ui`
   Shared workbench panel definitions and labels.
 
-- `docs/txt`
-  Architecture notes, design references, and future-facing planning docs.
+- `docs/design`
+  Architecture notes, design references, and future-facing planning docs. Files prefixed with `future-` describe upcoming phases.
 
 ## PR / Commit Checklist
 
