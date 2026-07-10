@@ -152,6 +152,7 @@ export const agentEventSchema = z.discriminatedUnion("type", [
     type: z.literal("message.delta"),
     messageId: z.string(),
     text: z.string(),
+    role: conversationRoleSchema.optional(),
   }),
   z.object({
     type: z.literal("message.completed"),

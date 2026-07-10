@@ -97,10 +97,10 @@ function upsertAction(actions: ActionState[], nextAction: ActionState): ActionSt
   return actions.map((action, currentIndex) => (currentIndex === index ? nextAction : action));
 }
 
-function createAssistantMessage(id: string, text: string): ConversationMessage {
+function createConversationMessage(id: string, role: ConversationMessage["role"], text: string): ConversationMessage {
   return {
     id,
-    role: "assistant",
+    role,
     content: text,
     timestamp: new Date().toISOString(),
   };
@@ -132,9 +132,10 @@ export function applyAgentEvent(session: SessionState, event: AgentEvent): Sessi
   const updatedAt = new Date().toISOString();
 
   if (event.type === "message.delta") {
+    const role = event.role ?? "assistant";
     const existing =
       session.messages.find((message) => message.id === event.messageId) ??
-      createAssistantMessage(event.messageId, "");
+      createConversationMessage(event.messageId, role, "");
 
     return {
       ...session,
