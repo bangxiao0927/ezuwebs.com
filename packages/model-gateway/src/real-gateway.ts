@@ -20,17 +20,78 @@ export interface RealModelGatewayOptions {
   profile?: ModelProfile;
 }
 
-function extractJsonLine(text: string): unknown | undefined {
-  const lines = text.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const trimmed = lines[i]!.trim();
-    if (!trimmed) continue;
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      // Not a JSON line; keep searching backward.
+function findObjectStart(text: string, end: number): number | undefined {
+  let depth = 0;
+  let inString = false;
+
+  for (let index = end; index >= 0; index -= 1) {
+    const character = text[index]!;
+
+    if (character === '"') {
+      let backslashCount = 0;
+      for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
+        backslashCount += 1;
+      }
+      if (backslashCount % 2 === 0) {
+        inString = !inString;
+      }
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (character === "}") {
+      depth += 1;
+    } else if (character === "{") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
     }
   }
+
+  return undefined;
+}
+
+function extractLastJsonObjectWithKey(
+  text: string,
+  expectedKey: string,
+): Record<string, unknown> | undefined {
+  let cursor = text.length - 1;
+
+  // The output contract puts structured JSON last; the small bound tolerates
+  // trailing model commentary without allowing malformed text to cause costly rescans.
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const end = text.lastIndexOf("}", cursor);
+    if (end < 0) {
+      return undefined;
+    }
+
+    const start = findObjectStart(text, end);
+    if (start === undefined) {
+      cursor = end - 1;
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1)) as unknown;
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed) &&
+        expectedKey in parsed
+      ) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Continue with an earlier candidate object.
+    }
+
+    cursor = start - 1;
+  }
+
   return undefined;
 }
 
@@ -69,7 +130,7 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
       }
 
       // Parse the structured JSON from the response.
-      const parsed = extractJsonLine(fullText) as Record<string, unknown> | undefined;
+      const parsed = extractLastJsonObjectWithKey(fullText, "plan");
 
       if (parsed?.plan && Array.isArray(parsed.plan)) {
         yield {
@@ -141,7 +202,7 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
         yield { type: "message.delta", messageId, text: chunk.content };
       }
 
-      const parsed = extractJsonLine(fullText) as Record<string, unknown> | undefined;
+      const parsed = extractLastJsonObjectWithKey(fullText, "actions");
 
       if (parsed?.actions && Array.isArray(parsed.actions)) {
         for (const act of parsed.actions as Record<string, unknown>[]) {

@@ -22,7 +22,10 @@ export interface ChatCompletionChunk {
 
 export function createOpenAIClient(config: OpenAIClientConfig) {
   const { apiKey, baseUrl } = config;
-  const chatEndpoint = `${baseUrl.replace(/\/+$/, "")}/v1/chat/completions`;
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+  const chatEndpoint = normalizedBaseUrl.endsWith("/v1")
+    ? `${normalizedBaseUrl}/chat/completions`
+    : `${normalizedBaseUrl}/v1/chat/completions`;
 
   async function* streamChat(opts: StreamOptions): AsyncIterable<ChatCompletionChunk> {
     const response = await fetch(chatEndpoint, {
@@ -58,7 +61,10 @@ export function createOpenAIClient(config: OpenAIClientConfig) {
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          buffer += decoder.decode();
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
@@ -83,6 +89,25 @@ export function createOpenAIClient(config: OpenAIClientConfig) {
             }
           } catch {
             // Skip malformed SSE lines.
+          }
+        }
+      }
+
+      const finalLine = buffer.trim();
+      if (finalLine.startsWith("data:")) {
+        const data = finalLine.slice("data:".length).trim();
+        if (data && data !== "[DONE]") {
+          try {
+            const parsed = JSON.parse(data);
+            const choice = parsed.choices?.[0];
+            if (choice?.delta?.content) {
+              yield {
+                content: choice.delta.content,
+                finishReason: choice.finish_reason ?? null,
+              };
+            }
+          } catch {
+            // Ignore an incomplete final SSE event.
           }
         }
       }
