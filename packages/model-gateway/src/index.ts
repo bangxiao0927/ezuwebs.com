@@ -6,6 +6,8 @@ export type ModelTask = "planning" | "coding" | "review" | "summary" | "title";
 export interface ModelRoute {
   model: string;
   temperature: number;
+  /** Optional per-route output token budget. Falls back to the client default. */
+  maxTokens?: number;
 }
 
 export interface ModelProfile {

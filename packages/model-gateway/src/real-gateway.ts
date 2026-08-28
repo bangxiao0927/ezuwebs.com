@@ -1,6 +1,10 @@
 import { type AgentEvent } from "@ezu/protocol";
 
-import { createOpenAIClient, type OpenAIClientConfig } from "./openai-client.js";
+import {
+  createOpenAIClient,
+  type ChatCompletionChunk,
+  type OpenAIClientConfig,
+} from "./openai-client.js";
 import {
   CODER_SYSTEM_PROMPT,
   PLANNER_SYSTEM_PROMPT,
@@ -55,10 +59,45 @@ function findObjectStart(text: string, end: number): number | undefined {
   return undefined;
 }
 
+// Prefer an explicit ```json fenced block: it is unambiguous and immune to
+// unbalanced braces in surrounding prose. Returns the last matching block.
+function extractFencedJsonWithKey(
+  text: string,
+  expectedKey: string,
+): Record<string, unknown> | undefined {
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  let found: Record<string, unknown> | undefined;
+
+  while ((match = fenceRegex.exec(text)) !== null) {
+    const body = match[1]?.trim();
+    if (!body) continue;
+    try {
+      const parsed = JSON.parse(body) as unknown;
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed) &&
+        expectedKey in parsed
+      ) {
+        found = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Ignore non-JSON fenced blocks (e.g. example code).
+    }
+  }
+
+  return found;
+}
+
 function extractLastJsonObjectWithKey(
   text: string,
   expectedKey: string,
 ): Record<string, unknown> | undefined {
+  // A fenced block is the most reliable signal; try it before brace scanning.
+  const fenced = extractFencedJsonWithKey(text, expectedKey);
+  if (fenced) return fenced;
+
   let cursor = text.length - 1;
 
   // The output contract puts structured JSON last; the small bound tolerates
@@ -99,7 +138,8 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
   const client = createOpenAIClient(options.clientConfig);
   const {
     planning = { model: "gpt-4o", temperature: 0.2 },
-    coding = { model: "gpt-4o", temperature: 0.1 },
+    // Coding returns full file contents, so give it a larger default budget.
+    coding = { model: "gpt-4o", temperature: 0.1, maxTokens: 16_384 },
     review = { model: "gpt-4o", temperature: 0.1 },
     summary = { model: "gpt-4o-mini", temperature: 0.3 },
     title = { model: "gpt-4o-mini", temperature: 0.4 },
@@ -113,11 +153,13 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
     async *streamPlan(input: PlannerInput): AsyncIterable<AgentEvent> {
       const messageId = crypto.randomUUID();
       let fullText = "";
+      let finishReason: ChatCompletionChunk["finishReason"] = null;
 
       // Stream the LLM response as message.delta events.
       const chunks = client.streamChat({
         model: planning.model,
         temperature: planning.temperature,
+        ...(planning.maxTokens !== undefined ? { maxTokens: planning.maxTokens } : {}),
         messages: [
           { role: "system", content: PLANNER_SYSTEM_PROMPT },
           { role: "user", content: input.prompt },
@@ -126,11 +168,24 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
 
       for await (const chunk of chunks) {
         fullText += chunk.content;
-        yield { type: "message.delta", messageId, text: chunk.content };
+        finishReason = chunk.finishReason ?? finishReason;
+        // Terminal frames may carry only a finishReason with empty content.
+        if (chunk.content) {
+          yield { type: "message.delta", messageId, text: chunk.content };
+        }
       }
 
       // Parse the structured JSON from the response.
       const parsed = extractLastJsonObjectWithKey(fullText, "plan");
+
+      // Surface truncation so a silently missing plan is explainable.
+      if (!parsed && finishReason === "length") {
+        yield {
+          type: "message.delta",
+          messageId,
+          text: "\n\n[warning] The plan was truncated before a complete response was produced (token limit reached).",
+        };
+      }
 
       if (parsed?.plan && Array.isArray(parsed.plan)) {
         yield {
@@ -187,10 +242,12 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
     async *streamCode(input: CoderInput): AsyncIterable<AgentEvent> {
       const messageId = crypto.randomUUID();
       let fullText = "";
+      let finishReason: ChatCompletionChunk["finishReason"] = null;
 
       const chunks = client.streamChat({
         model: coding.model,
         temperature: coding.temperature,
+        ...(coding.maxTokens !== undefined ? { maxTokens: coding.maxTokens } : {}),
         messages: [
           { role: "system", content: CODER_SYSTEM_PROMPT },
           { role: "user", content: input.prompt },
@@ -199,10 +256,22 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
 
       for await (const chunk of chunks) {
         fullText += chunk.content;
-        yield { type: "message.delta", messageId, text: chunk.content };
+        finishReason = chunk.finishReason ?? finishReason;
+        if (chunk.content) {
+          yield { type: "message.delta", messageId, text: chunk.content };
+        }
       }
 
       const parsed = extractLastJsonObjectWithKey(fullText, "actions");
+
+      // Surface truncation so silently missing actions are explainable.
+      if (!parsed && finishReason === "length") {
+        yield {
+          type: "message.delta",
+          messageId,
+          text: "\n\n[warning] The code output was truncated before a complete response was produced (token limit reached).",
+        };
+      }
 
       if (parsed?.actions && Array.isArray(parsed.actions)) {
         for (const act of parsed.actions as Record<string, unknown>[]) {
