@@ -17,6 +17,7 @@ const canvasRef = ref<HTMLCanvasElement | null>(null);
 const sketch = ref<SketchState>(EMPTY_SKETCH);
 const activePointerId = ref<number | null>(null);
 const logicalSize = ref({ width: 0, height: 0 });
+let backingDpr = 1;
 
 const strokeCount = () => sketch.value.strokes.length;
 
@@ -35,9 +36,8 @@ function redraw(): void {
   if (!canvas || !ctx) {
     return;
   }
-  const dpr = window.devicePixelRatio || 1;
   ctx.save();
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.setTransform(backingDpr, 0, 0, backingDpr, 0, 0);
   ctx.clearRect(0, 0, logicalSize.value.width, logicalSize.value.height);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -67,6 +67,7 @@ function resizeCanvasToContainer(): void {
   const width = parent?.clientWidth || canvas.clientWidth || 320;
   const height = 220;
   const dpr = window.devicePixelRatio || 1;
+  backingDpr = dpr;
   logicalSize.value = { width, height };
   canvas.width = Math.round(width * dpr);
   canvas.height = Math.round(height * dpr);
@@ -79,6 +80,7 @@ let resizeObserver: ResizeObserver | undefined;
 
 onMounted(() => {
   resizeCanvasToContainer();
+  window.addEventListener("resize", resizeCanvasToContainer);
   if (typeof ResizeObserver !== "undefined" && canvasRef.value?.parentElement) {
     resizeObserver = new ResizeObserver(() => resizeCanvasToContainer());
     resizeObserver.observe(canvasRef.value.parentElement);
@@ -87,6 +89,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();
+  window.removeEventListener("resize", resizeCanvasToContainer);
 });
 
 function handlePointerDown(event: PointerEvent): void {

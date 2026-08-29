@@ -68,6 +68,6 @@ test("building a prototype prompt describes the canvas size and stroke count", (
     prompt,
     "Use this scratch sketch as a rough layout reference: a 480x320px canvas with 2 hand-drawn strokes. " +
       "It is a manual wireframe hint, not machine-read artwork or an uploaded image. " +
-      "Interpret the described regions and proportions and propose a prototype layout that follows this rough structure.",
+      "No stroke geometry is included, so ask the user to describe the intended regions before proposing a prototype layout.",
   );
 });

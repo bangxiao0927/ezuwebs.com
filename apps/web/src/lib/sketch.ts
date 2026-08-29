@@ -51,6 +51,6 @@ export function buildPrototypePrompt(state: SketchState, canvasSize: SketchCanva
     `Use this scratch sketch as a rough layout reference: a ${canvasSize.width}x${canvasSize.height}px ` +
     `canvas with ${state.strokes.length} hand-drawn ${strokeWord}. ` +
     "It is a manual wireframe hint, not machine-read artwork or an uploaded image. " +
-    "Interpret the described regions and proportions and propose a prototype layout that follows this rough structure."
+    "No stroke geometry is included, so ask the user to describe the intended regions before proposing a prototype layout."
   );
 }
