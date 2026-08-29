@@ -1,10 +1,12 @@
 import type {
   ApprovalDecision,
   AuthUser,
+  BillingSummary,
   Dashboard,
   PatchStrategy,
   Session,
   SessionSummary,
+  UsagePage,
   WebEditorProperty,
   WorkspaceFile,
 } from "./types";
@@ -14,8 +16,8 @@ const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "same-origin",
-    headers: { "content-type": "application/json" },
     ...init,
+    headers: { "content-type": "application/json", ...(init?.headers as Record<string, string> | undefined) },
   });
 
   if (!response.ok) {
@@ -94,23 +96,27 @@ export async function applyEdit(
     patchStrategy: PatchStrategy;
     properties?: WebEditorProperty[];
     runAgent?: boolean;
+    requestId: string;
   },
 ): Promise<Session> {
+  const { requestId, ...body } = input;
   const data = await request<{ session: Session }>(
     `/sessions/${encodeURIComponent(sessionId)}/edit`,
     {
       method: "POST",
-      body: JSON.stringify(input),
+      headers: { "idempotency-key": requestId },
+      body: JSON.stringify(body),
     },
   );
   return data.session;
 }
 
-export async function sendPrompt(sessionId: string, text: string): Promise<Session> {
+export async function sendPrompt(sessionId: string, text: string, requestId: string): Promise<Session> {
   const data = await request<{ session: Session }>(
     `/sessions/${encodeURIComponent(sessionId)}/prompt`,
     {
       method: "POST",
+      headers: { "idempotency-key": requestId },
       body: JSON.stringify({ text }),
     },
   );
@@ -161,4 +167,27 @@ export async function resolveInput(
     },
   );
   return data.session;
+}
+
+export async function getBillingSummary(): Promise<BillingSummary> {
+  return request<BillingSummary>("/billing/summary");
+}
+
+export async function getUsage(options: { limit?: number; offset?: number } = {}): Promise<UsagePage> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) {
+    params.set("limit", String(options.limit));
+  }
+  if (options.offset !== undefined) {
+    params.set("offset", String(options.offset));
+  }
+  const query = params.toString();
+  return request<UsagePage>(`/billing/usage${query ? `?${query}` : ""}`);
+}
+
+export async function grantDevCredits(packageId: string): Promise<BillingSummary> {
+  return request<BillingSummary>("/billing/dev-grant", {
+    method: "POST",
+    body: JSON.stringify({ packageId }),
+  });
 }

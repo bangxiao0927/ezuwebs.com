@@ -1,6 +1,7 @@
 import { bootstrapBlockEditDemo, executeApprovedBlockEdit } from "@ezu/agent";
 import { type ActionState, type AgentEvent } from "@ezu/protocol";
 
+import { chargeUsage, refundUsageCharge } from "./billing/billing-service.js";
 import {
   createDemoBootstrap,
   getDemoSessionDefinition,
@@ -53,6 +54,11 @@ export class SessionNotFoundError extends Error {}
 export class InteractionConflictError extends Error {}
 export class ActionRetryConflictError extends Error {}
 export { InteractionValidationError } from "./interaction.js";
+export {
+  InsufficientCreditsError,
+  MissingIdempotencyKeyError,
+  PreviousAttemptFailedError,
+} from "./billing/billing-service.js";
 
 let sessionRepository = createMemorySessionRepository();
 
@@ -210,32 +216,123 @@ export async function applyEdit(
     patchStrategy: InteractiveWebEditRequest["patchStrategy"];
     properties?: WebEditorProperty[];
     runAgent?: boolean;
+    requestId?: string;
   },
   requestingUserId?: string,
 ): Promise<SessionDto> {
   const record = await ensureSession(sessionId, requestingUserId);
-  const selectedState = createInteractiveWebEditorState(record.webEditor);
-  const blockId = selectedState.selectedBlockId ?? selectedState.blocks[0]?.id ?? "workbench";
-
-  let nextEditorState = createInteractiveWebEditorState(record.webEditor);
-  for (const property of input.properties ?? []) {
-    nextEditorState = upsertInteractiveWebEditorProperty(nextEditorState, property);
+  const shouldCharge = Boolean(requestingUserId) && input.runAgent !== false;
+  if (shouldCharge) {
+    const charge = await chargeUsage({
+      userId: requestingUserId!,
+      kind: "edit",
+      sessionId: record.id,
+      requestId: input.requestId ?? "",
+    });
+    if (!charge.applied) {
+      // Replayed request (e.g. a client retry): the edit already ran once, so
+      // return the current session state instead of running the agent again.
+      return toDto(record);
+    }
   }
 
-  const request: InteractiveWebEditRequest = {
-    selection: {
-      blockId,
-      path: getWebEditorBlockFile(blockId),
-    },
-    intent: input.intent,
-    patchStrategy: input.patchStrategy,
-    ...(input.properties ? { properties: input.properties } : {}),
-  };
+  try {
+    const selectedState = createInteractiveWebEditorState(record.webEditor);
+    const blockId = selectedState.selectedBlockId ?? selectedState.blocks[0]?.id ?? "workbench";
 
-  const response = createInteractiveWebEditResponse(request, nextEditorState);
-  record.webEditor = response.nextState;
+    let nextEditorState = createInteractiveWebEditorState(record.webEditor);
+    for (const property of input.properties ?? []) {
+      nextEditorState = upsertInteractiveWebEditorProperty(nextEditorState, property);
+    }
 
-  if (input.runAgent !== false) {
+    const request: InteractiveWebEditRequest = {
+      selection: {
+        blockId,
+        path: getWebEditorBlockFile(blockId),
+      },
+      intent: input.intent,
+      patchStrategy: input.patchStrategy,
+      ...(input.properties ? { properties: input.properties } : {}),
+    };
+
+    const response = createInteractiveWebEditResponse(request, nextEditorState);
+    record.webEditor = response.nextState;
+
+    if (input.runAgent !== false) {
+      const agentEvents = await bootstrapBlockEditDemo({
+        sessionId: record.id,
+        projectId: record.bootstrap.projectId,
+        blockId,
+        targetPath: getWebEditorBlockFile(blockId),
+        suggestedPrompt: response.suggestedPrompt,
+      });
+      record.events.push(...dropNoisyEvents(agentEvents));
+    }
+
+    await sessionRepository.save(record);
+    return toDto(record);
+  } catch (error) {
+    if (shouldCharge) {
+      await refundUsageCharge({
+        userId: requestingUserId!,
+        kind: "edit",
+        sessionId: record.id,
+        requestId: input.requestId ?? "",
+        reason: "edit failed after charge",
+      });
+    }
+    throw error;
+  }
+}
+
+export async function sendPrompt(
+  sessionId: string,
+  text: string,
+  requestingUserId?: string,
+  requestId?: string,
+): Promise<SessionDto> {
+  const record = await ensureSession(sessionId, requestingUserId);
+  const shouldCharge = Boolean(requestingUserId);
+  if (shouldCharge) {
+    const charge = await chargeUsage({
+      userId: requestingUserId!,
+      kind: "prompt",
+      sessionId: record.id,
+      requestId: requestId ?? "",
+    });
+    if (!charge.applied) {
+      // Replayed request (e.g. a client retry): the prompt already ran once, so
+      // return the current session state instead of running the agent again.
+      return toDto(record);
+    }
+  }
+
+  try {
+    const selectedEditor = createInteractiveWebEditorState(record.webEditor);
+    const blockId = selectedEditor.selectedBlockId ?? selectedEditor.blocks[0]?.id ?? "workbench";
+
+    const response = createInteractiveWebEditResponse(
+      {
+        selection: { blockId, path: getWebEditorBlockFile(blockId) },
+        intent: text,
+        patchStrategy: "refine",
+        properties: selectedEditor.properties,
+      },
+      selectedEditor,
+    );
+    record.webEditor = response.nextState;
+    const userMessageId = crypto.randomUUID();
+    record.events.push({
+      type: "message.delta",
+      messageId: userMessageId,
+      role: "user",
+      text,
+    });
+    record.events.push({
+      type: "message.completed",
+      messageId: userMessageId,
+    });
+
     const agentEvents = await bootstrapBlockEditDemo({
       sessionId: record.id,
       projectId: record.bootstrap.projectId,
@@ -244,54 +341,21 @@ export async function applyEdit(
       suggestedPrompt: response.suggestedPrompt,
     });
     record.events.push(...dropNoisyEvents(agentEvents));
+
+    await sessionRepository.save(record);
+    return toDto(record);
+  } catch (error) {
+    if (shouldCharge) {
+      await refundUsageCharge({
+        userId: requestingUserId!,
+        kind: "prompt",
+        sessionId: record.id,
+        requestId: requestId ?? "",
+        reason: "prompt failed after charge",
+      });
+    }
+    throw error;
   }
-
-  await sessionRepository.save(record);
-  return toDto(record);
-}
-
-export async function sendPrompt(
-  sessionId: string,
-  text: string,
-  requestingUserId?: string,
-): Promise<SessionDto> {
-  const record = await ensureSession(sessionId, requestingUserId);
-  const selectedEditor = createInteractiveWebEditorState(record.webEditor);
-  const blockId = selectedEditor.selectedBlockId ?? selectedEditor.blocks[0]?.id ?? "workbench";
-
-  const response = createInteractiveWebEditResponse(
-    {
-      selection: { blockId, path: getWebEditorBlockFile(blockId) },
-      intent: text,
-      patchStrategy: "refine",
-      properties: selectedEditor.properties,
-    },
-    selectedEditor,
-  );
-  record.webEditor = response.nextState;
-  const userMessageId = crypto.randomUUID();
-  record.events.push({
-    type: "message.delta",
-    messageId: userMessageId,
-    role: "user",
-    text,
-  });
-  record.events.push({
-    type: "message.completed",
-    messageId: userMessageId,
-  });
-
-  const agentEvents = await bootstrapBlockEditDemo({
-    sessionId: record.id,
-    projectId: record.bootstrap.projectId,
-    blockId,
-    targetPath: getWebEditorBlockFile(blockId),
-    suggestedPrompt: response.suggestedPrompt,
-  });
-  record.events.push(...dropNoisyEvents(agentEvents));
-
-  await sessionRepository.save(record);
-  return toDto(record);
 }
 
 function findPendingInteraction(

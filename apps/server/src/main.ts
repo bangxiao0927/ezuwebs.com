@@ -1,5 +1,8 @@
 import { createServer } from "node:http";
 
+import { resolveBillingEnabled } from "./config/billing-config.js";
+import { configureBillingEnabled, configureBillingStore } from "./domain/billing/billing-service.js";
+import { createSqliteBillingStore } from "./domain/billing/sqlite-billing-store.js";
 import { createFileSessionRepository } from "./domain/session-repository.js";
 import { configureSessionRepository, recoverSessionsOnStartup } from "./domain/sessions.js";
 import { createApiHandler } from "./http/router.js";
@@ -11,6 +14,8 @@ const sessionRepository = await createFileSessionRepository(
   process.env.SESSION_STORE_FILE ?? "./data/sessions.json",
 );
 configureSessionRepository(sessionRepository);
+configureBillingStore(createSqliteBillingStore());
+configureBillingEnabled(resolveBillingEnabled(process.env));
 
 const handler = createApiHandler();
 const server = createServer((request, response) => {

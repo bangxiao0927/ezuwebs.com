@@ -34,6 +34,24 @@ const answerValue = ref("");
 const viewMode = ref<"preview" | "code" | "diff">("preview");
 const activeFile = ref<string | undefined>();
 
+const pendingEditRequestId = ref<string | undefined>();
+const pendingPromptRequestId = ref<string | undefined>();
+
+/**
+ * Reuses the same requestId across retries of the same user action so a
+ * network retry cannot cause the backend to charge or run the agent twice.
+ * Cleared by the caller once the action settles, whether it succeeds or
+ * fails: a failed attempt may have been refunded server-side, so a manual
+ * retry must mint a fresh requestId and actually run rather than being
+ * rejected as a replay of a known-failed one.
+ */
+function requestIdFor(pending: { value: string | undefined }): string {
+  if (!pending.value) {
+    pending.value = crypto.randomUUID();
+  }
+  return pending.value;
+}
+
 const viewModel = computed(() => session.value?.viewModel ?? null);
 
 function syncFromSession(next: Session): void {
@@ -100,21 +118,24 @@ async function handleSelectBlock(blockId: string): Promise<void> {
 }
 
 async function handleSubmitEdit(): Promise<void> {
-  if (!session.value) {
+  if (!session.value || busy.value) {
     return;
   }
   const properties = session.value.viewModel.webEditor.properties.map((property) => ({
     ...property,
     value: propertyValues[property.key] ?? property.value,
   }));
+  const requestId = requestIdFor(pendingEditRequestId);
   const next = await run(() =>
     applyEdit(session.value!.id, {
       intent: intent.value.trim() || session.value!.viewModel.webEditor.lastIntent || "Refine the selected block.",
       patchStrategy: patchStrategy.value,
       properties,
       runAgent: true,
+      requestId,
     }),
   );
+  pendingEditRequestId.value = undefined;
   if (next) {
     syncFromSession(next);
     flashToast("Generated a new block-scoped patch.");
@@ -123,11 +144,16 @@ async function handleSubmitEdit(): Promise<void> {
 
 async function handlePrompt(): Promise<void> {
   const text = composer.value.trim();
+  if (busy.value) {
+    return;
+  }
   if (!text) {
     flashToast("Type a request before sending.");
     return;
   }
-  const next = await run(() => sendPrompt(session.value!.id, text));
+  const requestId = requestIdFor(pendingPromptRequestId);
+  const next = await run(() => sendPrompt(session.value!.id, text, requestId));
+  pendingPromptRequestId.value = undefined;
   if (next) {
     syncFromSession(next);
     composer.value = "";

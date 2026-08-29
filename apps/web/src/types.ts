@@ -155,3 +155,33 @@ export interface Dashboard {
   projects: DashboardProject[];
   counts: DashboardCounts;
 }
+
+export interface DevGrantPackage {
+  id: string;
+  label: string;
+  credits: number;
+}
+
+export interface BillingSummary {
+  balance: number;
+  devGrantsEnabled: boolean;
+  devGrantPackages: DevGrantPackage[];
+}
+
+export interface UsageEvent {
+  id: string;
+  kind: string;
+  units: number;
+  credits: number;
+  model?: string;
+  sessionId?: string;
+  createdAt: string;
+}
+
+export interface UsagePage {
+  events: UsageEvent[];
+  total: number;
+  totalCreditsConsumed: number;
+  limit: number;
+  offset: number;
+}

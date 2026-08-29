@@ -45,3 +45,40 @@ export const authSessions = sqliteTable(
 
 export type OauthAccount = typeof oauthAccounts.$inferSelect;
 export type AuthSession = typeof authSessions.$inferSelect;
+
+export const creditLedger = sqliteTable(
+  "credit_ledger",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    type: text("type", { enum: ["grant", "debit", "refund"] }).notNull(),
+    // Integer minor-unit credits. Positive for grant/refund, negative for debit.
+    amount: integer("amount").notNull(),
+    reason: text("reason").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("credit_ledger_idempotency_key_unique").on(table.idempotencyKey),
+    index("credit_ledger_user_id_idx").on(table.userId),
+  ],
+);
+
+export const usageEvents = sqliteTable(
+  "usage_events",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    units: integer("units").notNull(),
+    credits: integer("credits").notNull(),
+    model: text("model"),
+    sessionId: text("session_id"),
+    status: text("status", { enum: ["succeeded", "refunded"] }).notNull().default("succeeded"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [index("usage_events_user_id_idx").on(table.userId)],
+);
+
+export type CreditLedgerEntry = typeof creditLedger.$inferSelect;
+export type UsageEvent = typeof usageEvents.$inferSelect;

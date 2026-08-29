@@ -15,6 +15,20 @@
       "when": 1787968200000,
       "tag": "0001_google_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788039375020,
+      "tag": "0002_loving_greymalkin",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1788040184835,
+      "tag": "0003_conscious_triathlon",
+      "breakpoints": true
     }
   ]
 }
