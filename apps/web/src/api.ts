@@ -1,5 +1,6 @@
 import type {
   ApprovalDecision,
+  AuthUser,
   PatchStrategy,
   Session,
   SessionSummary,
@@ -11,6 +12,7 @@ const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "same-origin",
     headers: { "content-type": "application/json" },
     ...init,
   });
@@ -42,6 +44,19 @@ export async function createSession(definitionId: string): Promise<Session> {
     body: JSON.stringify({ definitionId }),
   });
   return data.session;
+}
+
+export function googleSignInUrl(): string {
+  return `${API_BASE}/auth/google`;
+}
+
+export async function getCurrentUser(): Promise<AuthUser | null> {
+  const data = await request<{ user: AuthUser | null }>("/auth/me");
+  return data.user;
+}
+
+export async function logout(): Promise<void> {
+  await request<{ ok: boolean }>("/auth/logout", { method: "POST" });
 }
 
 export async function getSession(sessionId: string): Promise<Session> {

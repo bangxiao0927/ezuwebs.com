@@ -1,5 +1,7 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 
+import type { AuthServicePort } from "./auth-routes.js";
+import { handleAuthRoute } from "./auth-routes.js";
 import {
   applyEdit,
   createSession,
@@ -42,7 +44,22 @@ async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
   return JSON.parse(raw) as T;
 }
 
-export function createApiHandler(): Handler {
+export interface CreateApiHandlerOptions {
+  authService?: AuthServicePort;
+}
+
+let cachedDefaultAuthService: AuthServicePort | undefined;
+
+async function resolveDefaultAuthService(): Promise<AuthServicePort> {
+  if (!cachedDefaultAuthService) {
+    // Deferred so importing the router never pulls in the better-sqlite3 native binding.
+    const { createDefaultAuthService } = await import("../domain/auth/default-auth-service.js");
+    cachedDefaultAuthService = createDefaultAuthService();
+  }
+  return cachedDefaultAuthService;
+}
+
+export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler {
   return async (request, response) => {
     try {
       const method = request.method ?? "GET";
@@ -64,6 +81,14 @@ export function createApiHandler(): Handler {
       if (segments[0] !== "api") {
         sendJson(response, 404, { error: "Not found" } satisfies JsonError);
         return;
+      }
+
+      if (segments[1] === "auth") {
+        const authService = options.authService ?? (await resolveDefaultAuthService());
+        const handled = await handleAuthRoute(segments, method, request, response, authService, sendJson);
+        if (handled) {
+          return;
+        }
       }
 
       // GET /api/sessions
