@@ -99,6 +99,7 @@ export async function sendPrompt(sessionId: string, text: string): Promise<Sessi
 
 export async function resolveApproval(
   sessionId: string,
+  interactionId: string,
   decision: ApprovalDecision,
   reason: string,
 ): Promise<Session> {
@@ -106,7 +107,7 @@ export async function resolveApproval(
     `/sessions/${encodeURIComponent(sessionId)}/approval`,
     {
       method: "POST",
-      body: JSON.stringify({ decision, reason }),
+      body: JSON.stringify({ interactionId, decision, reason }),
     },
   );
   return data.session;

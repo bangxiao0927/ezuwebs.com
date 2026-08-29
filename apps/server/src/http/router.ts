@@ -7,6 +7,8 @@ import {
   getSessionWorkspaceFiles,
   listSessionDefinitions,
   resolveApproval,
+  InteractionConflictError,
+  SessionNotFoundError,
   selectBlock,
   sendPrompt,
 } from "../domain/sessions.js";
@@ -129,10 +131,19 @@ export function createApiHandler(): Handler {
         }
 
         if (action === "approval" && method === "POST") {
-          const body = await readJsonBody<{ decision?: string; reason?: string }>(request);
-          const decision = body.decision === "rejected" ? "rejected" : "approved";
+          const body = await readJsonBody<{
+            interactionId?: string;
+            decision?: string;
+            reason?: string;
+          }>(request);
+          if (!body.interactionId || !["approved", "rejected"].includes(body.decision ?? "")) {
+            sendJson(response, 400, { error: "interactionId and a valid decision are required" });
+            return;
+          }
+          const decision = body.decision as "approved" | "rejected";
           const session = await resolveApproval(
             sessionId,
+            body.interactionId,
             decision,
             body.reason ?? "Replacement requested.",
           );
@@ -143,7 +154,13 @@ export function createApiHandler(): Handler {
 
       sendJson(response, 404, { error: "Not found" } satisfies JsonError);
     } catch (error) {
-      sendJson(response, 500, {
+      const status =
+        error instanceof SessionNotFoundError
+          ? 404
+          : error instanceof InteractionConflictError
+            ? 409
+            : 500;
+      sendJson(response, status, {
         error: error instanceof Error ? error.message : "Internal server error",
       } satisfies JsonError);
     }

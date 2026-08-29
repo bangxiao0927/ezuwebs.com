@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 
-import { listSessions } from "../api";
+import { createSession, listSessions } from "../api";
 import { navigateToSession } from "../router";
 import type { SessionSummary } from "../types";
 
 const sessions = ref<SessionSummary[]>([]);
 const loading = ref(true);
 const error = ref<string | undefined>();
+const openingId = ref<string | undefined>();
 
 onMounted(async () => {
   try {
@@ -19,8 +20,18 @@ onMounted(async () => {
   }
 });
 
-function open(session: SessionSummary): void {
-  navigateToSession(session.id);
+async function open(session: SessionSummary): Promise<void> {
+  if (openingId.value) return;
+  openingId.value = session.id;
+  error.value = undefined;
+  try {
+    const created = await createSession(session.id);
+    navigateToSession(created.id);
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Failed to create session";
+  } finally {
+    openingId.value = undefined;
+  }
 }
 </script>
 
@@ -44,12 +55,14 @@ function open(session: SessionSummary): void {
         :key="session.id"
         type="button"
         class="session-card"
+        :disabled="Boolean(openingId)"
         @click="open(session)"
       >
         <span class="session-card-title">{{ session.title }}</span>
         <span class="session-card-project">{{ session.projectName }}</span>
         <span class="session-card-description">{{ session.description }}</span>
         <span class="session-card-meta">{{ session.taskTimestamp }}</span>
+        <span v-if="openingId === session.id" class="session-card-meta">Opening…</span>
       </button>
     </section>
   </main>

@@ -27,8 +27,8 @@ export function useRoute() {
   return route;
 }
 
-export function navigateToSession(definitionId: string): void {
-  window.location.hash = `#/session/${encodeURIComponent(definitionId)}`;
+export function navigateToSession(sessionId: string): void {
+  window.location.hash = `#/session/${encodeURIComponent(sessionId)}`;
 }
 
 export function navigateHome(): void {
