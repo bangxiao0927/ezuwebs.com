@@ -153,6 +153,93 @@ button:disabled {
   font-size: 0.82rem;
 }
 
+.dashboard {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 48px 24px;
+  display: grid;
+  gap: 24px;
+}
+
+.dashboard-status {
+  color: var(--muted);
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dashboard-user-name {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+.dashboard-user-plan {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.dashboard-header-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.dashboard-home-button,
+.dashboard-signout-button {
+  padding: 8px 16px;
+  border-radius: 10px;
+  background: var(--card);
+  color: inherit;
+  font-size: 0.85rem;
+}
+
+.dashboard-counts {
+  margin: 0;
+  color: var(--muted);
+}
+
+.dashboard-project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+.dashboard-project-card {
+  display: grid;
+  gap: 8px;
+  text-align: left;
+  padding: 20px;
+  border-radius: 18px;
+  background: var(--card);
+}
+
+.dashboard-project-title {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+}
+
+.dashboard-project-name {
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.dashboard-project-description {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.dashboard-project-meta {
+  color: var(--dim);
+  font-size: 0.82rem;
+}
+
 .workspace {
   min-height: 100vh;
   display: grid;

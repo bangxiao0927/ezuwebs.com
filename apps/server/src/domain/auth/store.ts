@@ -3,6 +3,7 @@ export interface AuthUser {
   email: string;
   name?: string;
   avatarUrl?: string;
+  plan: string;
 }
 
 export interface GoogleIdentity {

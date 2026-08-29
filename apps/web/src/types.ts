@@ -135,4 +135,23 @@ export interface AuthUser {
   email: string;
   name?: string;
   avatarUrl?: string;
+  plan: string;
+}
+
+export interface DashboardProject {
+  id: string;
+  projectName: string;
+  description: string;
+  taskTitle: string;
+  taskTimestamp: string;
+}
+
+export interface DashboardCounts {
+  totalProjects: number;
+}
+
+export interface Dashboard {
+  user: AuthUser;
+  projects: DashboardProject[];
+  counts: DashboardCounts;
 }

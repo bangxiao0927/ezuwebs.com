@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 
 import { createSession, getCurrentUser, googleSignInUrl, listSessions, logout } from "../api";
-import { navigateToSession } from "../router";
+import { navigateToDashboard, navigateToSession } from "../router";
 import type { AuthUser, SessionSummary } from "../types";
 
 const sessions = ref<SessionSummary[]>([]);
@@ -66,6 +66,7 @@ async function open(session: SessionSummary): Promise<void> {
         <span v-if="authLoading" class="launcher-auth-status">Checking sign-in…</span>
         <template v-else-if="user">
           <span class="launcher-auth-status">Signed in as {{ user.name ?? user.email }}</span>
+          <button type="button" class="launcher-auth-button" @click="navigateToDashboard">Dashboard</button>
           <button type="button" class="launcher-auth-button" @click="signOut">Sign out</button>
         </template>
         <button v-else type="button" class="launcher-auth-button" @click="signInWithGoogle">

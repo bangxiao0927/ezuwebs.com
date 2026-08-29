@@ -128,7 +128,7 @@ export function listSessionDefinitions(): SessionSummaryDto[] {
   ].map(definitionToSummary);
 }
 
-export async function createSession(definitionId: string): Promise<SessionDto> {
+export async function createSession(definitionId: string, ownerUserId?: string): Promise<SessionDto> {
   const definition = getDemoSessionDefinition(definitionId);
   const generatedBootstrap = await createDemoBootstrap(definition.id);
   const sessionId = crypto.randomUUID();
@@ -140,32 +140,64 @@ export async function createSession(definitionId: string): Promise<SessionDto> {
     bootstrap,
     events: [...bootstrap.initialEvents],
     webEditor: createInteractiveWebEditorState(bootstrap.webEditor),
+    ...(ownerUserId ? { ownerUserId } : {}),
   };
 
   await sessionRepository.create(record);
   return toDto(record);
 }
 
-async function ensureSession(sessionId: string): Promise<SessionRecord> {
+async function ensureSession(sessionId: string, requestingUserId?: string): Promise<SessionRecord> {
   const existing = await sessionRepository.get(sessionId);
-  if (existing) {
-    return existing;
+  if (!existing) {
+    throw new SessionNotFoundError(`Unknown session: ${sessionId}`);
   }
-
-  throw new SessionNotFoundError(`Unknown session: ${sessionId}`);
+  if (existing.ownerUserId && existing.ownerUserId !== requestingUserId) {
+    // Owned sessions are hidden from anonymous callers and other users.
+    throw new SessionNotFoundError(`Unknown session: ${sessionId}`);
+  }
+  return existing;
 }
 
-export async function getSession(sessionId: string): Promise<SessionDto> {
-  return toDto(await ensureSession(sessionId));
+export async function getSession(sessionId: string, requestingUserId?: string): Promise<SessionDto> {
+  return toDto(await ensureSession(sessionId, requestingUserId));
 }
 
-export async function getSessionWorkspaceFiles(sessionId: string): Promise<WorkspaceFileEntry[]> {
-  const record = await ensureSession(sessionId);
+export type OwnedSessionSummary = Pick<
+  SessionDto,
+  "id" | "projectName" | "description" | "taskTitle" | "taskTimestamp"
+>;
+
+export async function listSessionsForOwner(ownerUserId: string): Promise<OwnedSessionSummary[]> {
+  const records = await sessionRepository.list();
+  return records
+    .filter((record) => record.ownerUserId === ownerUserId)
+    .map((record) => {
+      const definition = getDemoSessionDefinition(record.definitionId);
+      return {
+        id: record.id,
+        projectName: definition.projectName,
+        description: definition.description,
+        taskTitle: definition.taskTitle,
+        taskTimestamp: definition.taskTimestamp,
+      };
+    });
+}
+
+export async function getSessionWorkspaceFiles(
+  sessionId: string,
+  requestingUserId?: string,
+): Promise<WorkspaceFileEntry[]> {
+  const record = await ensureSession(sessionId, requestingUserId);
   return record.bootstrap.workspaceFiles ?? [];
 }
 
-export async function selectBlock(sessionId: string, blockId: string): Promise<SessionDto> {
-  const record = await ensureSession(sessionId);
+export async function selectBlock(
+  sessionId: string,
+  blockId: string,
+  requestingUserId?: string,
+): Promise<SessionDto> {
+  const record = await ensureSession(sessionId, requestingUserId);
   record.webEditor = selectInteractiveWebEditorBlock(record.webEditor, blockId);
   await sessionRepository.save(record);
   return toDto(record);
@@ -179,8 +211,9 @@ export async function applyEdit(
     properties?: WebEditorProperty[];
     runAgent?: boolean;
   },
+  requestingUserId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId);
+  const record = await ensureSession(sessionId, requestingUserId);
   const selectedState = createInteractiveWebEditorState(record.webEditor);
   const blockId = selectedState.selectedBlockId ?? selectedState.blocks[0]?.id ?? "workbench";
 
@@ -217,8 +250,12 @@ export async function applyEdit(
   return toDto(record);
 }
 
-export async function sendPrompt(sessionId: string, text: string): Promise<SessionDto> {
-  const record = await ensureSession(sessionId);
+export async function sendPrompt(
+  sessionId: string,
+  text: string,
+  requestingUserId?: string,
+): Promise<SessionDto> {
+  const record = await ensureSession(sessionId, requestingUserId);
   const selectedEditor = createInteractiveWebEditorState(record.webEditor);
   const blockId = selectedEditor.selectedBlockId ?? selectedEditor.blocks[0]?.id ?? "workbench";
 
@@ -299,8 +336,9 @@ export async function resolveApproval(
   interactionId: string,
   decision: "approved" | "rejected",
   reason: string,
+  requestingUserId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId);
+  const record = await ensureSession(sessionId, requestingUserId);
   const pending = findPendingInteraction(record.events, interactionId);
   if (pending.interaction.type !== "confirm") {
     throw new InteractionConflictError("This interaction requires a choice or text response");
@@ -359,8 +397,9 @@ export async function resolveChoiceInteraction(
   sessionId: string,
   interactionId: string,
   optionId: string,
+  requestingUserId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId);
+  const record = await ensureSession(sessionId, requestingUserId);
   const pending = findPendingInteraction(record.events, interactionId);
   if (pending.interaction.type !== "choice") {
     throw new InteractionConflictError("This interaction requires an approval decision");
@@ -375,8 +414,9 @@ export async function resolveInputInteraction(
   sessionId: string,
   interactionId: string,
   value: string,
+  requestingUserId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId);
+  const record = await ensureSession(sessionId, requestingUserId);
   const pending = findPendingInteraction(record.events, interactionId);
   if (pending.interaction.type !== "input") {
     throw new InteractionConflictError("This interaction requires an approval decision");
@@ -387,8 +427,12 @@ export async function resolveInputInteraction(
   return toDto(record);
 }
 
-export async function retryAction(sessionId: string, actionId: string): Promise<SessionDto> {
-  const record = await ensureSession(sessionId);
+export async function retryAction(
+  sessionId: string,
+  actionId: string,
+  requestingUserId?: string,
+): Promise<SessionDto> {
+  const record = await ensureSession(sessionId, requestingUserId);
   const current = findActionState(record.events, actionId);
 
   if (!current) {

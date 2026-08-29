@@ -1,6 +1,7 @@
 import type {
   ApprovalDecision,
   AuthUser,
+  Dashboard,
   PatchStrategy,
   Session,
   SessionSummary,
@@ -57,6 +58,10 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
 
 export async function logout(): Promise<void> {
   await request<{ ok: boolean }>("/auth/logout", { method: "POST" });
+}
+
+export async function getDashboard(): Promise<Dashboard> {
+  return request<Dashboard>("/dashboard");
 }
 
 export async function getSession(sessionId: string): Promise<Session> {

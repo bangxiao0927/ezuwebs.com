@@ -2,6 +2,7 @@
 import { computed } from "vue";
 
 import SessionLauncher from "./components/SessionLauncher.vue";
+import UserDashboard from "./components/UserDashboard.vue";
 import WorkbenchView from "./components/WorkbenchView.vue";
 import { useRoute } from "./router";
 
@@ -11,5 +12,6 @@ const sessionId = computed(() => route.value.sessionId ?? "");
 
 <template>
   <SessionLauncher v-if="route.name === 'launcher'" />
+  <UserDashboard v-else-if="route.name === 'dashboard'" />
   <WorkbenchView v-else :session-id="sessionId" :key="sessionId" />
 </template>

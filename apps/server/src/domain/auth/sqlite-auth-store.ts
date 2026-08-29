@@ -6,6 +6,7 @@ function toAuthUser(user: User): AuthUser {
   return {
     id: user.id,
     email: user.email,
+    plan: user.plan,
     ...(user.name ? { name: user.name } : {}),
     ...(user.avatarUrl ? { avatarUrl: user.avatarUrl } : {}),
   };

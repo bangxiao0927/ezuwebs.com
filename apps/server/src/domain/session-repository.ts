@@ -9,6 +9,7 @@ export interface SessionRecord {
   bootstrap: WebAppBootstrap;
   events: AgentEvent[];
   webEditor: InteractiveWebEditorState;
+  ownerUserId?: string;
 }
 
 export interface SessionRepository {
