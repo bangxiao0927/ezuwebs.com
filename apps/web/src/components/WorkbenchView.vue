@@ -3,7 +3,7 @@ import { computed, reactive, ref, watch } from "vue";
 
 import {
   applyEdit,
-  createSession,
+  getSession,
   getWorkspaceFiles,
   resolveApproval,
   selectBlock,
@@ -14,7 +14,7 @@ import type { PatchStrategy, Session, WorkspaceFile } from "../types";
 import ConversationColumn from "./ConversationColumn.vue";
 import WorkspaceColumn from "./WorkspaceColumn.vue";
 
-const props = defineProps<{ definitionId: string }>();
+const props = defineProps<{ sessionId: string }>();
 
 const session = ref<Session | null>(null);
 const files = ref<WorkspaceFile[]>([]);
@@ -59,7 +59,7 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = undefined;
   try {
-    const next = await createSession(props.definitionId);
+    const next = await getSession(props.sessionId);
     syncFromSession(next);
     files.value = await getWorkspaceFiles(next.id);
     if (files.value.length > 0) {
@@ -72,7 +72,7 @@ async function load(): Promise<void> {
   }
 }
 
-watch(() => props.definitionId, load, { immediate: true });
+watch(() => props.sessionId, load, { immediate: true });
 
 async function run<T>(operation: () => Promise<T>): Promise<T | undefined> {
   if (busy.value) {
@@ -134,7 +134,12 @@ async function handlePrompt(): Promise<void> {
 
 async function handleApproval(decision: "approved" | "rejected"): Promise<void> {
   const reason = rejectReason.value.trim() || "Replacement requested.";
-  const next = await run(() => resolveApproval(session.value!.id, decision, reason));
+  const interactionId = session.value?.viewModel.pendingInteraction?.id;
+  if (!interactionId) {
+    flashToast("This interaction is no longer pending.");
+    return;
+  }
+  const next = await run(() => resolveApproval(session.value!.id, interactionId, decision, reason));
   if (next) {
     syncFromSession(next);
     flashToast(decision === "approved" ? "Patch approved." : "Patch rejected; replacement prompt prepared.");

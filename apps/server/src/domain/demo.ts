@@ -112,7 +112,11 @@ export function listDemoSessions(): DemoSessionDefinition[] {
 }
 
 export function getDemoSessionDefinition(sessionId: string): DemoSessionDefinition {
-  return demoSessions.find((session) => session.id === sessionId) ?? demoSessions[0]!;
+  const definition = demoSessions.find((session) => session.id === sessionId);
+  if (!definition) {
+    throw new Error(`Unknown session definition: ${sessionId}`);
+  }
+  return definition;
 }
 
 export async function createDemoBootstrap(sessionId = "club-promo"): Promise<WebAppBootstrap> {

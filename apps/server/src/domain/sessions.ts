@@ -52,6 +52,9 @@ export interface SessionDto {
   viewModel: WorkbenchViewModel;
 }
 
+export class SessionNotFoundError extends Error {}
+export class InteractionConflictError extends Error {}
+
 const sessions = new Map<string, SessionRecord>();
 
 function definitionToSummary(definition: DemoSessionDefinition): SessionSummaryDto {
@@ -120,10 +123,12 @@ export function listSessionDefinitions(): SessionSummaryDto[] {
 
 export async function createSession(definitionId: string): Promise<SessionDto> {
   const definition = getDemoSessionDefinition(definitionId);
-  const bootstrap = await createDemoBootstrap(definition.id);
+  const generatedBootstrap = await createDemoBootstrap(definition.id);
+  const sessionId = crypto.randomUUID();
+  const bootstrap = { ...generatedBootstrap, sessionId };
 
   const record: SessionRecord = {
-    id: bootstrap.sessionId,
+    id: sessionId,
     definitionId: definition.id,
     bootstrap,
     events: [...bootstrap.initialEvents],
@@ -140,14 +145,7 @@ async function ensureSession(sessionId: string): Promise<SessionRecord> {
     return existing;
   }
 
-  // Recreate a session from its definition id when the store was reset.
-  const definitionId = sessionId.replace(/-session$/, "");
-  await createSession(definitionId);
-  const created = sessions.get(`${definitionId}-session`);
-  if (!created) {
-    throw new Error(`Unknown session: ${sessionId}`);
-  }
-  return created;
+  throw new SessionNotFoundError(`Unknown session: ${sessionId}`);
 }
 
 export async function getSession(sessionId: string): Promise<SessionDto> {
@@ -225,35 +223,58 @@ export async function sendPrompt(sessionId: string, text: string): Promise<Sessi
     selectedEditor,
   );
   record.webEditor = response.nextState;
+  const userMessageId = crypto.randomUUID();
   record.events.push({
     type: "message.delta",
-    messageId: `assistant-ui-${Date.now()}`,
-    text: `Queued prompt: ${text}`,
+    messageId: userMessageId,
+    role: "user",
+    text,
   });
   record.events.push({
     type: "message.completed",
-    messageId: `assistant-ui-${Date.now()}`,
+    messageId: userMessageId,
   });
+
+  const agentEvents = await bootstrapBlockEditDemo({
+    sessionId: record.id,
+    projectId: record.bootstrap.projectId,
+    blockId,
+    targetPath: getWebEditorBlockFile(blockId),
+    suggestedPrompt: response.suggestedPrompt,
+  });
+  record.events.push(...dropNoisyEvents(agentEvents));
 
   return toDto(record);
 }
 
 export async function resolveApproval(
   sessionId: string,
+  interactionId: string,
   decision: "approved" | "rejected",
   reason: string,
 ): Promise<SessionDto> {
   const record = await ensureSession(sessionId);
+  const resolvedIds = new Set(
+    record.events
+      .filter(
+        (event): event is Extract<AgentEvent, { type: "interaction.resolved" }> =>
+          event.type === "interaction.resolved",
+      )
+      .map((event) => event.interactionId),
+  );
   const pending = record.events
     .slice()
     .reverse()
     .find(
       (event): event is Extract<AgentEvent, { type: "interaction.required" }> =>
-        event.type === "interaction.required",
+        event.type === "interaction.required" && !resolvedIds.has(event.interaction.id),
     );
 
-  if (!pending || pending.interaction.type !== "confirm") {
-    return toDto(record);
+  if (!pending || pending.interaction.id !== interactionId) {
+    throw new InteractionConflictError("The interaction is missing, stale, or already resolved");
+  }
+  if (pending.interaction.type !== "confirm") {
+    throw new InteractionConflictError("This interaction requires a choice or text response");
   }
 
   record.events.push({

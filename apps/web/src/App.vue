@@ -6,10 +6,10 @@ import WorkbenchView from "./components/WorkbenchView.vue";
 import { useRoute } from "./router";
 
 const route = useRoute();
-const definitionId = computed(() => route.value.sessionId ?? "");
+const sessionId = computed(() => route.value.sessionId ?? "");
 </script>
 
 <template>
   <SessionLauncher v-if="route.name === 'launcher'" />
-  <WorkbenchView v-else :definition-id="definitionId" :key="definitionId" />
+  <WorkbenchView v-else :session-id="sessionId" :key="sessionId" />
 </template>

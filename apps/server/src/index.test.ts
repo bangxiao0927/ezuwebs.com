@@ -3,6 +3,13 @@ import assert from "node:assert/strict";
 
 import { createReplacementPrompt } from "./domain/replacement.js";
 import {
+  createSession,
+  getSession,
+  InteractionConflictError,
+  resolveApproval,
+  sendPrompt,
+} from "./domain/sessions.js";
+import {
   createInteractiveWebEditResponse,
   createWorkbenchViewModel,
 } from "./domain/view-model.js";
@@ -39,4 +46,34 @@ test("createWorkbenchViewModel reduces events into a renderable view model", () 
   assert.equal(viewModel.chatMessages.length, 1);
   assert.equal(viewModel.chatMessages[0]?.content, "Hello");
   assert.ok(viewModel.webEditor.blocks.length >= 1);
+});
+
+test("sessions survive reloads and prompts run through the agent workflow", async () => {
+  const created = await createSession("club-promo");
+  const beforeCount = created.viewModel.chatMessages.length;
+
+  const updated = await sendPrompt(created.id, "Make the hero more concise");
+  const reloaded = await getSession(created.id);
+
+  assert.equal(reloaded.id, created.id);
+  assert.equal(reloaded.viewModel.chatMessages.length, updated.viewModel.chatMessages.length);
+  assert.ok(reloaded.viewModel.chatMessages.length > beforeCount);
+  assert.ok(
+    reloaded.viewModel.chatMessages.some(
+      (message) => message.role === "user" && message.content === "Make the hero more concise",
+    ),
+  );
+  assert.ok(reloaded.viewModel.actions.length > created.viewModel.actions.length);
+});
+
+test("an interaction cannot be resolved twice", async () => {
+  const created = await createSession("agency-redesign");
+  const interactionId = created.viewModel.pendingInteraction?.id;
+  assert.ok(interactionId);
+
+  await resolveApproval(created.id, interactionId, "approved", "Approved");
+  await assert.rejects(
+    resolveApproval(created.id, interactionId, "approved", "Approved again"),
+    InteractionConflictError,
+  );
 });
