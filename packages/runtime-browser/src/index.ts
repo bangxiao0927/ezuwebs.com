@@ -440,12 +440,16 @@ class BrowserRuntimeProcess implements RuntimeProcess {
 }
 
 export class BrowserRuntimeStub implements RuntimeAdapter {
-  private readonly files = new Map<string, string>();
+  private readonly files: Map<string, string>;
   private readonly fileWatchers = new Set<(event: { path: string; type: string }) => void>();
   private readonly portWatchers = new Set<
     (event: { port: number; url: string; status: "open" | "close" }) => void
   >();
   private readonly openPorts = new Map<number, string>();
+
+  constructor(seedFiles: Array<{ path: string; content: string }> = []) {
+    this.files = new Map(seedFiles.map((file) => [file.path, file.content]));
+  }
 
   async readFile(path: string): Promise<string> {
     return this.files.get(path) ?? "";
@@ -559,6 +563,8 @@ export class BrowserRuntimeStub implements RuntimeAdapter {
   }
 }
 
-export function createBrowserRuntimeStub(): RuntimeAdapter {
-  return new BrowserRuntimeStub();
+export function createBrowserRuntimeStub(
+  seedFiles: Array<{ path: string; content: string }> = [],
+): RuntimeAdapter {
+  return new BrowserRuntimeStub(seedFiles);
 }

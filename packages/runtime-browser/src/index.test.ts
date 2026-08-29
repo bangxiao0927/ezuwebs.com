@@ -36,3 +36,21 @@ test("file changes refresh an open preview and notify port watchers", async () =
   assert.notEqual(latest.url, first.url);
   assert.match(decodePreview(latest.url), /Second revision/);
 });
+
+test("seeded files are readable and listed without any writes", async () => {
+  const runtime = new BrowserRuntimeStub([
+    { path: "src/App.tsx", content: "export const App = 1;" },
+    { path: "README.md", content: "# Hello" },
+  ]);
+
+  assert.equal(await runtime.readFile("src/App.tsx"), "export const App = 1;");
+  assert.deepEqual(await runtime.listFiles(""), ["README.md", "src/App.tsx"]);
+});
+
+test("patching a seeded file preserves its prior content instead of starting from empty", async () => {
+  const runtime = new BrowserRuntimeStub([{ path: "src/App.tsx", content: "const seeded = true;" }]);
+
+  await runtime.patchFile("src/App.tsx", "// appended patch");
+
+  assert.equal(await runtime.readFile("src/App.tsx"), "const seeded = true;\n// appended patch");
+});

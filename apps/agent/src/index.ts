@@ -13,6 +13,11 @@ import { createBrowserRuntimeStub } from "@ezu/runtime-browser";
 
 import { createReplacementStructurePatch, normalizeReason } from "./replacement.js";
 
+export interface WorkspaceFileEntry {
+  path: string;
+  content: string;
+}
+
 export interface AgentAppOptions {
   sessionId: string;
   projectId: string;
@@ -26,6 +31,12 @@ export interface BlockEditDemoOptions extends AgentAppOptions {
 
 export interface ApprovedBlockEditExecutionOptions extends AgentAppOptions {
   action: ActionState;
+  workspaceFiles?: WorkspaceFileEntry[];
+}
+
+export interface ApprovedBlockEditExecutionResult {
+  events: AgentEvent[];
+  workspaceFiles: WorkspaceFileEntry[];
 }
 
 export interface ReplacementBlockEditDemoOptions extends BlockEditDemoOptions {
@@ -176,9 +187,16 @@ export async function bootstrapBlockEditDemo(
   return events;
 }
 
+async function snapshotWorkspaceFiles(runtime: RuntimeAdapter): Promise<WorkspaceFileEntry[]> {
+  const paths = await runtime.listFiles("");
+  return Promise.all(
+    paths.map(async (path) => ({ path, content: await runtime.readFile(path) })),
+  );
+}
+
 export async function executeApprovedBlockEdit(
   options: ApprovedBlockEditExecutionOptions,
-): Promise<AgentEvent[]> {
+): Promise<ApprovedBlockEditExecutionResult> {
   const sessionStore = createSessionStore();
   let session = createSessionState({
     id: options.sessionId,
@@ -188,7 +206,7 @@ export async function executeApprovedBlockEdit(
 
   sessionStore.upsert(session);
 
-  const runtime = createBrowserRuntimeStub();
+  const runtime = createBrowserRuntimeStub(options.workspaceFiles ?? []);
   const executor = createExecutor({ runtime, sessionStore });
   const stopBridging = await bridgeRuntimeEvents({
     runtime,
@@ -203,7 +221,13 @@ export async function executeApprovedBlockEdit(
     action: completedAction,
   });
 
+  let workspaceFiles = options.workspaceFiles ?? [];
+
   if (completedAction.status === "completed") {
+    if (completedAction.action.type === "file.patch" || completedAction.action.type === "file.write") {
+      workspaceFiles = await snapshotWorkspaceFiles(runtime);
+    }
+
     const previewAction = createTimelineAction({
       source: "system",
       action: {
@@ -227,7 +251,7 @@ export async function executeApprovedBlockEdit(
   sessionStore.upsert(session);
   stopBridging();
 
-  return events;
+  return { events, workspaceFiles };
 }
 
 export async function bootstrapReplacementBlockEditDemo(
