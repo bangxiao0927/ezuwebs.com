@@ -1,10 +1,13 @@
 import { type AgentEvent } from "@ezu/protocol";
+import { createRealModelGateway } from "./real-gateway.js";
 
 export type ModelTask = "planning" | "coding" | "review" | "summary" | "title";
 
 export interface ModelRoute {
   model: string;
   temperature: number;
+  /** Optional per-route output token budget. Falls back to the client default. */
+  maxTokens?: number;
 }
 
 export interface ModelProfile {
@@ -113,4 +116,42 @@ export function createModelGateway(profile: ModelProfile = defaultModelProfile):
       return input.content.slice(0, 140);
     },
   };
+}
+
+// Re-export the real (OpenAI-backed) gateway and its dependencies.
+export { createRealModelGateway, type RealModelGatewayOptions } from "./real-gateway.js";
+export { createOpenAIClient, type OpenAIClientConfig, type ChatMessage, type StreamOptions, type ChatCompletionChunk } from "./openai-client.js";
+
+/**
+ * Resolve a ModelGateway based on environment configuration.
+ *
+ * - If OPENAI_API_KEY is set, returns a real LLM-backed gateway.
+ * - Otherwise falls back to the stub demo gateway.
+ *
+ * The real gateway reads these environment variables:
+ *   OPENAI_API_KEY     (required) — API key for the OpenAI-compatible endpoint.
+ *   OPENAI_BASE_URL    (optional) — defaults to "https://api.openai.com".
+ *   OPENAI_PLAN_MODEL  (optional) — model for planning tasks (default: gpt-4o).
+ *   OPENAI_CODE_MODEL  (optional) — model for coding tasks (default: gpt-4o).
+ */
+export function resolveModelGateway(env: typeof process.env = process.env): ModelGateway {
+  const apiKey = env.OPENAI_API_KEY?.trim();
+
+  if (apiKey) {
+    return createRealModelGateway({
+      clientConfig: {
+        apiKey,
+        baseUrl: env.OPENAI_BASE_URL?.trim() || "https://api.openai.com",
+      },
+      profile: {
+        planning: { model: env.OPENAI_PLAN_MODEL?.trim() || "gpt-4o", temperature: 0.2 },
+        coding: { model: env.OPENAI_CODE_MODEL?.trim() || "gpt-4o", temperature: 0.1 },
+        review: { model: env.OPENAI_PLAN_MODEL?.trim() || "gpt-4o", temperature: 0.1 },
+        summary: { model: "gpt-4o-mini", temperature: 0.3 },
+        title: { model: "gpt-4o-mini", temperature: 0.4 },
+      },
+    });
+  }
+
+  return createModelGateway();
 }
