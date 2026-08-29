@@ -80,15 +80,7 @@ export async function bootstrapBlockEditDemo(
   sessionStore.upsert(session);
 
   const gateway = createModelGateway();
-  const runtime = createBrowserRuntimeStub();
-  const executor = createExecutor({ runtime, sessionStore });
   const messageId = crypto.randomUUID();
-  const stopBridging = await bridgeRuntimeEvents({
-    runtime,
-    apply: (event) => {
-      session = applyEvent(session, events, event);
-    },
-  });
 
   session = applyEvent(session, events, {
     type: "message.delta",
@@ -180,7 +172,6 @@ export async function bootstrapBlockEditDemo(
   });
 
   sessionStore.upsert(session);
-  stopBridging();
 
   return events;
 }

@@ -101,7 +101,7 @@ function planStatusLabel(status: string): string {
       </div>
     </article>
 
-    <article v-else-if="approval" :class="['card', approval.status === 'approved' ? 'approval-success-card' : 'approval-reject-card']">
+    <article v-else-if="approval" :class="['card', approval.status === 'rejected' ? 'approval-reject-card' : 'approval-success-card']">
       <p class="eyebrow">Last decision</p>
       <strong>{{ approval.title }}</strong>
       <p class="description-text">{{ approval.summary }}</p>
