@@ -9,7 +9,10 @@ import {
   getSessionWorkspaceFiles,
   listSessionDefinitions,
   resolveApproval,
+  resolveChoiceInteraction,
+  resolveInputInteraction,
   InteractionConflictError,
+  InteractionValidationError,
   SessionNotFoundError,
   selectBlock,
   sendPrompt,
@@ -175,6 +178,30 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
           sendJson(response, 200, { session });
           return;
         }
+
+        if (action === "interaction" && method === "POST") {
+          const body = await readJsonBody<{
+            interactionId?: string;
+            optionId?: string;
+            value?: string;
+          }>(request);
+          if (!body.interactionId) {
+            sendJson(response, 400, { error: "interactionId is required" });
+            return;
+          }
+          if (typeof body.optionId === "string") {
+            const session = await resolveChoiceInteraction(sessionId, body.interactionId, body.optionId);
+            sendJson(response, 200, { session });
+            return;
+          }
+          if (typeof body.value === "string") {
+            const session = await resolveInputInteraction(sessionId, body.interactionId, body.value);
+            sendJson(response, 200, { session });
+            return;
+          }
+          sendJson(response, 400, { error: "optionId or value is required" });
+          return;
+        }
       }
 
       sendJson(response, 404, { error: "Not found" } satisfies JsonError);
@@ -184,6 +211,8 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
           ? 404
           : error instanceof InteractionConflictError
             ? 409
+            : error instanceof InteractionValidationError
+              ? 400
             : 500;
       sendJson(response, status, {
         error: error instanceof Error ? error.message : "Internal server error",

@@ -6,6 +6,8 @@ import {
   getSession,
   getWorkspaceFiles,
   resolveApproval,
+  resolveChoice,
+  resolveInput,
   selectBlock,
   sendPrompt,
 } from "../api";
@@ -28,6 +30,7 @@ const intent = ref("");
 const patchStrategy = ref<PatchStrategy>("refine");
 const propertyValues = reactive<Record<string, string>>({});
 const rejectReason = ref("");
+const answerValue = ref("");
 const viewMode = ref<"preview" | "code" | "diff">("preview");
 const activeFile = ref<string | undefined>();
 
@@ -145,6 +148,38 @@ async function handleApproval(decision: "approved" | "rejected"): Promise<void> 
     flashToast(decision === "approved" ? "Patch approved." : "Patch rejected; replacement prompt prepared.");
   }
 }
+
+async function handleChoice(optionId: string): Promise<void> {
+  const interactionId = session.value?.viewModel.pendingInteraction?.id;
+  if (!interactionId) {
+    flashToast("This interaction is no longer pending.");
+    return;
+  }
+  const next = await run(() => resolveChoice(session.value!.id, interactionId, optionId));
+  if (next) {
+    syncFromSession(next);
+    flashToast("Choice submitted.");
+  }
+}
+
+async function handleAnswer(): Promise<void> {
+  const value = answerValue.value.trim();
+  const interactionId = session.value?.viewModel.pendingInteraction?.id;
+  if (!interactionId) {
+    flashToast("This interaction is no longer pending.");
+    return;
+  }
+  if (!value) {
+    flashToast("Type a response before submitting.");
+    return;
+  }
+  const next = await run(() => resolveInput(session.value!.id, interactionId, value));
+  if (next) {
+    syncFromSession(next);
+    answerValue.value = "";
+    flashToast("Response submitted.");
+  }
+}
 </script>
 
 <template>
@@ -169,10 +204,13 @@ async function handleApproval(decision: "approved" | "rejected"): Promise<void> 
         :description="session.description"
         v-model:composer="composer"
         v-model:reject-reason="rejectReason"
+        v-model:answer-value="answerValue"
         :busy="busy"
         :on-send="handlePrompt"
         :on-approve="() => handleApproval('approved')"
         :on-reject="() => handleApproval('rejected')"
+        :on-choose="handleChoice"
+        :on-answer="handleAnswer"
       />
       <WorkspaceColumn
         :view-model="viewModel"

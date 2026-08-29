@@ -8,12 +8,15 @@
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm -w build && node --test \"dist/apps/agent/src/index.test.js\""
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@ezu/core": "workspace:*",
     "@ezu/model-gateway": "workspace:*",
     "@ezu/protocol": "workspace:*",
     "@ezu/runtime-browser": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
   }
 }

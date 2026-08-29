@@ -42,11 +42,13 @@ export interface WorkbenchViewModel {
 }
 
 export interface ApprovalDecisionState {
-  status: "approved" | "rejected";
+  status: "approved" | "rejected" | "answered";
   title: string;
   summary: string;
   rejectionReason?: string;
   followUpStrategy?: "revise" | "replace_structure";
+  optionId?: string;
+  value?: string;
 }
 
 export interface WebAppEventState {
@@ -116,6 +118,8 @@ export function reduceWorkbenchEvents(
         summary: event.summary,
         ...(event.rejectionReason ? { rejectionReason: event.rejectionReason } : {}),
         ...(event.followUpStrategy ? { followUpStrategy: event.followUpStrategy } : {}),
+        ...(event.optionId ? { optionId: event.optionId } : {}),
+        ...(event.value ? { value: event.value } : {}),
       };
     }
   }

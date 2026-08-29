@@ -109,6 +109,7 @@ export const pendingInteractionSchema = z.discriminatedUnion("type", [
     id: z.string(),
     title: z.string(),
     summary: z.string(),
+    actionId: z.string().optional(),
   }),
   z.object({
     type: z.literal("input"),
@@ -191,11 +192,13 @@ export const agentEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("interaction.resolved"),
     interactionId: z.string(),
-    status: z.enum(["approved", "rejected"]),
+    status: z.enum(["approved", "rejected", "answered"]),
     title: z.string(),
     summary: z.string(),
     rejectionReason: z.string().optional(),
     followUpStrategy: z.enum(["revise", "replace_structure"]).optional(),
+    optionId: z.string().optional(),
+    value: z.string().optional(),
   }),
 ]);
 export type AgentEvent = z.infer<typeof agentEventSchema>;

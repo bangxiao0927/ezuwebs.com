@@ -127,3 +127,33 @@ export async function resolveApproval(
   );
   return data.session;
 }
+
+export async function resolveChoice(
+  sessionId: string,
+  interactionId: string,
+  optionId: string,
+): Promise<Session> {
+  const data = await request<{ session: Session }>(
+    `/sessions/${encodeURIComponent(sessionId)}/interaction`,
+    {
+      method: "POST",
+      body: JSON.stringify({ interactionId, optionId }),
+    },
+  );
+  return data.session;
+}
+
+export async function resolveInput(
+  sessionId: string,
+  interactionId: string,
+  value: string,
+): Promise<Session> {
+  const data = await request<{ session: Session }>(
+    `/sessions/${encodeURIComponent(sessionId)}/interaction`,
+    {
+      method: "POST",
+      body: JSON.stringify({ interactionId, value }),
+    },
+  );
+  return data.session;
+}
