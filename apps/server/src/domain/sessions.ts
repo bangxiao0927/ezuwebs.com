@@ -153,7 +153,7 @@ async function ensureSession(sessionId: string, requestingUserId?: string): Prom
     throw new SessionNotFoundError(`Unknown session: ${sessionId}`);
   }
   if (existing.ownerUserId && existing.ownerUserId !== requestingUserId) {
-    // A session bound to another (or no) user must look exactly like an unknown one.
+    // Owned sessions are hidden from anonymous callers and other users.
     throw new SessionNotFoundError(`Unknown session: ${sessionId}`);
   }
   return existing;
@@ -163,9 +163,25 @@ export async function getSession(sessionId: string, requestingUserId?: string): 
   return toDto(await ensureSession(sessionId, requestingUserId));
 }
 
-export async function listSessionsForOwner(ownerUserId: string): Promise<SessionDto[]> {
+export type OwnedSessionSummary = Pick<
+  SessionDto,
+  "id" | "projectName" | "description" | "taskTitle" | "taskTimestamp"
+>;
+
+export async function listSessionsForOwner(ownerUserId: string): Promise<OwnedSessionSummary[]> {
   const records = await sessionRepository.list();
-  return records.filter((record) => record.ownerUserId === ownerUserId).map(toDto);
+  return records
+    .filter((record) => record.ownerUserId === ownerUserId)
+    .map((record) => {
+      const definition = getDemoSessionDefinition(record.definitionId);
+      return {
+        id: record.id,
+        projectName: definition.projectName,
+        description: definition.description,
+        taskTitle: definition.taskTitle,
+        taskTimestamp: definition.taskTimestamp,
+      };
+    });
 }
 
 export async function getSessionWorkspaceFiles(
