@@ -17,10 +17,9 @@ export function decideIdempotency(outcome: RequestOutcome): IdempotencyDecision 
   if (outcome === "network") {
     return "retain";
   }
-  if (outcome.status >= 400 && outcome.status < 500) {
-    return "reset";
-  }
-  return "retain";
+  // An HTTP response is a definitive server outcome. Only a transport failure
+  // leaves the result unknown and therefore requires replaying the same key.
+  return "reset";
 }
 
 export function classifyRequestOutcome(error: unknown): RequestOutcome {

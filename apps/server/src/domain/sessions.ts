@@ -4,6 +4,7 @@ import { type ActionState, type AgentEvent } from "@ezu/protocol";
 import { chargeUsage, isBillingEnabled, refundUsageCharge } from "./billing/billing-service.js";
 import {
   createDemoBootstrap,
+  DEMO_SESSION_DEFINITION_IDS,
   getDemoSessionDefinition,
   UnknownSessionDefinitionError,
   type DemoSessionDefinition,
@@ -130,11 +131,7 @@ function dropNoisyEvents(events: AgentEvent[]): AgentEvent[] {
 }
 
 export function listSessionDefinitions(): SessionSummaryDto[] {
-  return [
-    getDemoSessionDefinition("club-promo"),
-    getDemoSessionDefinition("agency-redesign"),
-    getDemoSessionDefinition("portfolio-dash"),
-  ].map(definitionToSummary);
+  return DEMO_SESSION_DEFINITION_IDS.map(getDemoSessionDefinition).map(definitionToSummary);
 }
 
 export async function createSession(definitionId: string, ownerUserId?: string): Promise<SessionDto> {

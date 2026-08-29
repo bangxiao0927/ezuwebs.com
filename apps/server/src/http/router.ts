@@ -198,7 +198,11 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
       // POST /api/sessions { definitionId }
       if (segments.length === 2 && segments[1] === "sessions" && method === "POST") {
         const body = await readJsonBody<{ definitionId?: string }>(request, MAX_JSON_BODY_BYTES);
-        const currentUserId = await resolveCurrentUserId(request, options);
+        const currentUserId = await resolveCurrentUserIdForBilledAction(request, options);
+        if (isBillingEnabled() && !currentUserId) {
+          sendJson(response, 401, { error: "Authentication required" } satisfies JsonError);
+          return;
+        }
         const session = await createSession(body.definitionId ?? "club-promo", currentUserId);
         sendJson(response, 201, { session });
         return;

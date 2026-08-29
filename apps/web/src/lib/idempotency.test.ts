@@ -12,8 +12,8 @@ test("a network failure retains the requestId so a retry safely replays the same
   assert.equal(decideIdempotency("network"), "retain");
 });
 
-test("an unknown 5xx response retains the requestId so a retry safely replays the same attempt", () => {
-  assert.equal(decideIdempotency({ status: 503 }), "retain");
+test("a 5xx response resets the requestId because the server refunds failed work", () => {
+  assert.equal(decideIdempotency({ status: 503 }), "reset");
 });
 
 test("a definitive 4xx business error resets the requestId", () => {

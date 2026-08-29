@@ -133,7 +133,7 @@ test("POST /api/sessions/:id/prompt requires authentication once billing is enab
   await withServer(async (baseUrl) => {
     const created = await fetch(`${baseUrl}/api/sessions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
       body: JSON.stringify({ definitionId: "club-promo" }),
     });
     const { session } = (await created.json()) as { session: { id: string } };
@@ -143,6 +143,21 @@ test("POST /api/sessions/:id/prompt requires authentication once billing is enab
       headers: { "content-type": "application/json", "idempotency-key": "anon-prompt-1" },
       body: JSON.stringify({ text: "Make the hero more concise" }),
     });
+    assert.equal(response.status, 401);
+  });
+});
+
+test("POST /api/sessions requires authentication once billing is enabled", async () => {
+  configureSessionRepository(createMemorySessionRepository());
+  configureBillingStore(createMemoryBillingStore());
+
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ definitionId: "club-promo" }),
+    });
+
     assert.equal(response.status, 401);
   });
 });
@@ -222,7 +237,7 @@ test("POST /api/sessions/:id/edit requires authentication once billing is enable
   await withServer(async (baseUrl) => {
     const created = await fetch(`${baseUrl}/api/sessions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
       body: JSON.stringify({ definitionId: "club-promo" }),
     });
     const { session } = (await created.json()) as { session: { id: string } };
@@ -236,21 +251,21 @@ test("POST /api/sessions/:id/edit requires authentication once billing is enable
   });
 });
 
-test("POST /api/sessions/:id/edit does not require authentication when runAgent is false (no charge)", async () => {
+test("POST /api/sessions/:id/edit does not require idempotency when runAgent is false (no charge)", async () => {
   configureSessionRepository(createMemorySessionRepository());
   configureBillingStore(createMemoryBillingStore());
 
   await withServer(async (baseUrl) => {
     const created = await fetch(`${baseUrl}/api/sessions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
       body: JSON.stringify({ definitionId: "club-promo" }),
     });
     const { session } = (await created.json()) as { session: { id: string } };
 
     const response = await fetch(`${baseUrl}/api/sessions/${session.id}/edit`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
       body: JSON.stringify({ intent: "Tighten the copy", patchStrategy: "refine", runAgent: false }),
     });
     assert.equal(response.status, 200);
