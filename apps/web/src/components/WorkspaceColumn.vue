@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 
 import { copyText } from "../lib/clipboard";
+import { withPropertyValue } from "../lib/propertyValues";
 import type { PatchStrategy, WorkbenchViewModel, WorkspaceFile } from "../types";
 import DrawingScratch from "./DrawingScratch.vue";
 
@@ -27,15 +28,55 @@ const preview = computed(() => props.viewModel.previews.at(-1));
 const previewUrl = computed(() => preview.value?.url);
 const previewState = ref<"loading" | "ready" | "failed">("loading");
 const previewAttempt = ref(0);
+const PREVIEW_LOAD_TIMEOUT_MS = 8000;
+let previewTimeoutHandle: ReturnType<typeof window.setTimeout> | undefined;
 
-watch(previewUrl, () => {
-  previewState.value = "loading";
-  previewAttempt.value += 1;
-});
+function clearPreviewTimeout(): void {
+  if (previewTimeoutHandle !== undefined) {
+    window.clearTimeout(previewTimeoutHandle);
+    previewTimeoutHandle = undefined;
+  }
+}
+
+function armPreviewTimeout(): void {
+  clearPreviewTimeout();
+  previewTimeoutHandle = window.setTimeout(() => {
+    if (previewState.value === "loading") {
+      previewState.value = "failed";
+    }
+  }, PREVIEW_LOAD_TIMEOUT_MS);
+}
+
+watch(
+  previewUrl,
+  (url) => {
+    previewState.value = "loading";
+    previewAttempt.value += 1;
+    if (url) {
+      armPreviewTimeout();
+    } else {
+      clearPreviewTimeout();
+    }
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(clearPreviewTimeout);
 
 function retryPreview(): void {
   previewState.value = "loading";
   previewAttempt.value += 1;
+  armPreviewTimeout();
+}
+
+function handlePreviewLoad(): void {
+  clearPreviewTimeout();
+  previewState.value = "ready";
+}
+
+function handlePreviewError(): void {
+  clearPreviewTimeout();
+  previewState.value = "failed";
 }
 
 const selectedDiff = computed(() => props.viewModel.selectedDiffAction);
@@ -169,7 +210,7 @@ const terminalLines = computed(() => {
             <span>{{ property.label }}</span>
             <input
               :value="propertyValues[property.key]"
-              @input="propertyValues = { ...propertyValues, [property.key]: ($event.target as HTMLInputElement).value }"
+              @input="propertyValues = withPropertyValue(propertyValues, property.key, ($event.target as HTMLInputElement).value)"
               type="text"
             />
           </label>
@@ -199,8 +240,9 @@ const terminalLines = computed(() => {
               class="preview-frame"
               :src="previewUrl"
               title="Session preview"
-              @load="previewState = 'ready'"
-              @error="previewState = 'failed'"
+              sandbox="allow-scripts allow-forms"
+              @load="handlePreviewLoad"
+              @error="handlePreviewError"
             ></iframe>
             <div v-if="previewState === 'loading'" class="preview-status">Loading preview…</div>
             <div v-else-if="previewState === 'failed'" class="preview-status preview-error">

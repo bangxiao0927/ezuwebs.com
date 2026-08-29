@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 
 import { getBillingSummary, getUsage } from "../api";
+import { nextOffset, previousOffset } from "../lib/usagePagination";
 import { navigateHome, navigateToCredits, navigateToDashboard } from "../router";
 import type { BillingSummary, UsagePage } from "../types";
 
@@ -12,16 +13,17 @@ const error = ref<string | undefined>();
 const offset = ref(0);
 const limit = 20;
 
-async function load(): Promise<void> {
+async function load(offsetToLoad: number): Promise<void> {
   loading.value = true;
   error.value = undefined;
   try {
     const [summary, page] = await Promise.all([
       getBillingSummary(),
-      getUsage({ limit, offset: offset.value }),
+      getUsage({ limit, offset: offsetToLoad }),
     ]);
     balance.value = summary;
     usage.value = page;
+    offset.value = offsetToLoad;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Failed to load usage";
   } finally {
@@ -29,16 +31,14 @@ async function load(): Promise<void> {
   }
 }
 
-onMounted(load);
+onMounted(() => load(offset.value));
 
 function nextPage(): void {
-  offset.value += limit;
-  void load();
+  void load(nextOffset(offset.value, limit));
 }
 
 function previousPage(): void {
-  offset.value = Math.max(0, offset.value - limit);
-  void load();
+  void load(previousOffset(offset.value, limit));
 }
 </script>
 

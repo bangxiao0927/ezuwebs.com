@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
 import {
   applyEdit,
@@ -11,6 +11,8 @@ import {
   selectBlock,
   sendPrompt,
 } from "../api";
+import { classifyRequestOutcome, decideIdempotency } from "../lib/idempotency";
+import { initialPropertyValues, propertiesWithValues } from "../lib/propertyValues";
 import { navigateHome } from "../router";
 import type { PatchStrategy, Session, WorkspaceFile } from "../types";
 import ConversationColumn from "./ConversationColumn.vue";
@@ -28,7 +30,7 @@ const toast = ref<string | undefined>();
 const composer = ref("");
 const intent = ref("");
 const patchStrategy = ref<PatchStrategy>("refine");
-const propertyValues = reactive<Record<string, string>>({});
+const propertyValues = ref<Record<string, string>>({});
 const rejectReason = ref("");
 const answerValue = ref("");
 const viewMode = ref<"preview" | "code" | "diff">("preview");
@@ -40,10 +42,8 @@ const pendingPromptRequestId = ref<string | undefined>();
 /**
  * Reuses the same requestId across retries of the same user action so a
  * network retry cannot cause the backend to charge or run the agent twice.
- * Cleared by the caller once the action settles, whether it succeeds or
- * fails: a failed attempt may have been refunded server-side, so a manual
- * retry must mint a fresh requestId and actually run rather than being
- * rejected as a replay of a known-failed one.
+ * Cleared by `runIdempotent` once the outcome is final (see decideIdempotency);
+ * an unresolved outcome keeps this id so a manual retry safely replays it.
  */
 function requestIdFor(pending: { value: string | undefined }): string {
   if (!pending.value) {
@@ -56,12 +56,7 @@ const viewModel = computed(() => session.value?.viewModel ?? null);
 
 function syncFromSession(next: Session): void {
   session.value = next;
-  for (const key of Object.keys(propertyValues)) {
-    delete propertyValues[key];
-  }
-  for (const property of next.viewModel.webEditor.properties) {
-    propertyValues[property.key] = property.value;
-  }
+  propertyValues.value = initialPropertyValues(next.viewModel.webEditor.properties);
   if (!activeFile.value && files.value.length > 0) {
     activeFile.value = files.value[0]?.path;
   }
@@ -110,6 +105,36 @@ async function run<T>(operation: () => Promise<T>): Promise<T | undefined> {
   }
 }
 
+/**
+ * Like `run`, but for writes that carry an idempotency key: the pending
+ * requestId is only cleared once the server outcome is known to be final
+ * (success or a definitive 4xx). A network failure or an unrecognised 5xx
+ * keeps the same requestId so a manual retry safely replays the attempt
+ * instead of risking a duplicate charge or agent run.
+ */
+async function runIdempotent<T>(
+  pending: { value: string | undefined },
+  operation: () => Promise<T>,
+): Promise<T | undefined> {
+  if (busy.value) {
+    return undefined;
+  }
+  busy.value = true;
+  try {
+    const result = await operation();
+    pending.value = undefined;
+    return result;
+  } catch (cause) {
+    if (decideIdempotency(classifyRequestOutcome(cause)) === "reset") {
+      pending.value = undefined;
+    }
+    flashToast(cause instanceof Error ? cause.message : "Request failed");
+    return undefined;
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function handleSelectBlock(blockId: string): Promise<void> {
   const next = await run(() => selectBlock(session.value!.id, blockId));
   if (next) {
@@ -121,12 +146,9 @@ async function handleSubmitEdit(): Promise<void> {
   if (!session.value || busy.value) {
     return;
   }
-  const properties = session.value.viewModel.webEditor.properties.map((property) => ({
-    ...property,
-    value: propertyValues[property.key] ?? property.value,
-  }));
+  const properties = propertiesWithValues(session.value.viewModel.webEditor.properties, propertyValues.value);
   const requestId = requestIdFor(pendingEditRequestId);
-  const next = await run(() =>
+  const next = await runIdempotent(pendingEditRequestId, () =>
     applyEdit(session.value!.id, {
       intent: intent.value.trim() || session.value!.viewModel.webEditor.lastIntent || "Refine the selected block.",
       patchStrategy: patchStrategy.value,
@@ -135,7 +157,6 @@ async function handleSubmitEdit(): Promise<void> {
       requestId,
     }),
   );
-  pendingEditRequestId.value = undefined;
   if (next) {
     syncFromSession(next);
     flashToast("Generated a new block-scoped patch.");
@@ -152,8 +173,7 @@ async function handlePrompt(): Promise<void> {
     return;
   }
   const requestId = requestIdFor(pendingPromptRequestId);
-  const next = await run(() => sendPrompt(session.value!.id, text, requestId));
-  pendingPromptRequestId.value = undefined;
+  const next = await runIdempotent(pendingPromptRequestId, () => sendPrompt(session.value!.id, text, requestId));
   if (next) {
     syncFromSession(next);
     composer.value = "";
@@ -252,7 +272,7 @@ async function handleAnswer(): Promise<void> {
       />
     </section>
 
-    <div v-if="toast" class="workspace-toast">{{ toast }}</div>
+    <div v-if="toast" class="workspace-toast" role="status" aria-live="polite">{{ toast }}</div>
   </main>
 
   <main class="workspace-loading" v-else-if="loading">
