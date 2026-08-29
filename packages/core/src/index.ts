@@ -10,6 +10,15 @@ import {
   type SessionState,
 } from "@ezu/protocol";
 
+export {
+  decideRecovery,
+  type RecoveryDecision,
+  type RecoveryPolicyInput,
+  type RecoveryStrategy,
+} from "./recovery.js";
+
+export { recoverInterruptedActions } from "./interrupted-actions.js";
+
 export interface RuntimeProcess {
   id: string;
   kill(): Promise<void>;
@@ -67,6 +76,7 @@ export function createSessionState(input: Pick<SessionState, "id" | "projectId">
     plan: [],
     actions: [],
     runtime: createEmptyRuntimeSnapshot(),
+    status: "active",
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -94,7 +104,25 @@ function upsertAction(actions: ActionState[], nextAction: ActionState): ActionSt
     return [...actions, nextAction];
   }
 
+  if (actions[index]!.status === "completed") {
+    return actions;
+  }
+
   return actions.map((action, currentIndex) => (currentIndex === index ? nextAction : action));
+}
+
+function markActionFailed(actions: ActionState[], actionId: string, error: string): ActionState[] {
+  const index = actions.findIndex((action) => action.id === actionId);
+
+  if (index === -1 || actions[index]!.status === "completed") {
+    return actions;
+  }
+
+  return actions.map((action, currentIndex) =>
+    currentIndex === index
+      ? { ...action, status: "failed", error, updatedAt: new Date().toISOString() }
+      : action,
+  );
 }
 
 function createConversationMessage(id: string, role: ConversationMessage["role"], text: string): ConversationMessage {
@@ -225,6 +253,24 @@ export function applyAgentEvent(session: SessionState, event: AgentEvent): Sessi
         ...session.runtime,
         openPorts: [...remainingPorts, nextPort].sort((left, right) => left.port - right.port),
       },
+      updatedAt,
+    };
+  }
+
+  if (event.type === "execution.error") {
+    return {
+      ...session,
+      actions: event.actionId
+        ? markActionFailed(session.actions, event.actionId, event.message)
+        : session.actions,
+      updatedAt,
+    };
+  }
+
+  if (event.type === "session.lifecycle") {
+    return {
+      ...session,
+      status: event.status,
       updatedAt,
     };
   }

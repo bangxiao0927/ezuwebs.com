@@ -9,27 +9,23 @@ import {
 import { buildChoiceResolutionEvent, buildInputResolutionEvent } from "./interaction.js";
 import { createReplacementPrompt } from "./replacement.js";
 import {
+  createMemorySessionRepository,
+  type SessionRecord,
+  type SessionRepository,
+} from "./session-repository.js";
+import {
   createInteractiveWebEditorState,
   createInteractiveWebEditResponse,
   createWorkbenchViewModel,
   getWebEditorBlockFile,
   selectInteractiveWebEditorBlock,
   upsertInteractiveWebEditorProperty,
-  type InteractiveWebEditorState,
   type InteractiveWebEditRequest,
   type WebAppBootstrap,
   type WebEditorProperty,
   type WorkbenchViewModel,
 } from "./view-model.js";
 import { type WorkspaceFileEntry } from "./workspace.js";
-
-interface SessionRecord {
-  id: string;
-  definitionId: string;
-  bootstrap: WebAppBootstrap;
-  events: AgentEvent[];
-  webEditor: InteractiveWebEditorState;
-}
 
 export interface SessionSummaryDto {
   id: string;
@@ -55,9 +51,18 @@ export interface SessionDto {
 
 export class SessionNotFoundError extends Error {}
 export class InteractionConflictError extends Error {}
+export class ActionRetryConflictError extends Error {}
 export { InteractionValidationError } from "./interaction.js";
 
-const sessions = new Map<string, SessionRecord>();
+let sessionRepository = createMemorySessionRepository();
+
+export function configureSessionRepository(repository: SessionRepository): void {
+  sessionRepository = repository;
+}
+
+export async function recoverSessionsOnStartup(): Promise<void> {
+  await sessionRepository.recoverInterruptedSessions();
+}
 
 function definitionToSummary(definition: DemoSessionDefinition): SessionSummaryDto {
   return {
@@ -137,12 +142,12 @@ export async function createSession(definitionId: string): Promise<SessionDto> {
     webEditor: createInteractiveWebEditorState(bootstrap.webEditor),
   };
 
-  sessions.set(record.id, record);
+  await sessionRepository.create(record);
   return toDto(record);
 }
 
 async function ensureSession(sessionId: string): Promise<SessionRecord> {
-  const existing = sessions.get(sessionId);
+  const existing = await sessionRepository.get(sessionId);
   if (existing) {
     return existing;
   }
@@ -162,6 +167,7 @@ export async function getSessionWorkspaceFiles(sessionId: string): Promise<Works
 export async function selectBlock(sessionId: string, blockId: string): Promise<SessionDto> {
   const record = await ensureSession(sessionId);
   record.webEditor = selectInteractiveWebEditorBlock(record.webEditor, blockId);
+  await sessionRepository.save(record);
   return toDto(record);
 }
 
@@ -207,6 +213,7 @@ export async function applyEdit(
     record.events.push(...dropNoisyEvents(agentEvents));
   }
 
+  await sessionRepository.save(record);
   return toDto(record);
 }
 
@@ -246,6 +253,7 @@ export async function sendPrompt(sessionId: string, text: string): Promise<Sessi
   });
   record.events.push(...dropNoisyEvents(agentEvents));
 
+  await sessionRepository.save(record);
   return toDto(record);
 }
 
@@ -343,6 +351,7 @@ export async function resolveApproval(
     };
   }
 
+  await sessionRepository.save(record);
   return toDto(record);
 }
 
@@ -358,6 +367,7 @@ export async function resolveChoiceInteraction(
   }
 
   record.events.push(buildChoiceResolutionEvent(pending.interaction, optionId));
+  await sessionRepository.save(record);
   return toDto(record);
 }
 
@@ -373,5 +383,41 @@ export async function resolveInputInteraction(
   }
 
   record.events.push(buildInputResolutionEvent(pending.interaction, value));
+  await sessionRepository.save(record);
+  return toDto(record);
+}
+
+export async function retryAction(sessionId: string, actionId: string): Promise<SessionDto> {
+  const record = await ensureSession(sessionId);
+  const current = findActionState(record.events, actionId);
+
+  if (!current) {
+    throw new ActionRetryConflictError(`Unknown action: ${actionId}`);
+  }
+
+  if (current.status === "completed") {
+    throw new ActionRetryConflictError("This action already completed and cannot be retried");
+  }
+
+  if (current.status !== "failed") {
+    throw new ActionRetryConflictError(`Action is not in a retryable state: ${current.status}`);
+  }
+
+  const { error: _previousError, ...currentWithoutError } = current;
+  const retryingAction: ActionState = {
+    ...currentWithoutError,
+    status: "pending",
+    updatedAt: new Date().toISOString(),
+  };
+  record.events.push({ type: "action.updated", action: retryingAction });
+
+  const executionEvents = await executeApprovedBlockEdit({
+    sessionId: record.id,
+    projectId: record.bootstrap.projectId,
+    action: retryingAction,
+  });
+  record.events.push(...dropNoisyEvents(executionEvents));
+
+  await sessionRepository.save(record);
   return toDto(record);
 }
