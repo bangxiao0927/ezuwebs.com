@@ -11,14 +11,23 @@ import type {
   WorkspaceFile,
 } from "./types";
 
+import { ApiError } from "./apiError";
+
+export { ApiError };
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    credentials: "same-origin",
-    ...init,
-    headers: { "content-type": "application/json", ...(init?.headers as Record<string, string> | undefined) },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      credentials: "same-origin",
+      ...init,
+      headers: { "content-type": "application/json", ...(init?.headers as Record<string, string> | undefined) },
+    });
+  } catch (cause) {
+    throw new Error(cause instanceof Error ? cause.message : "Network request failed");
+  }
 
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`;
@@ -30,7 +39,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // Ignore non-JSON error bodies.
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   return (await response.json()) as T;

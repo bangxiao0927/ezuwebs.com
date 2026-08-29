@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 
 import { createMemoryBillingStore } from "./memory-billing-store.js";
 import {
+  DEV_GRANT_PACKAGES,
   DevGrantsDisabledError,
   FREE_GRANT_CREDITS,
   InsufficientCreditsError,
   MissingIdempotencyKeyError,
   PreviousAttemptFailedError,
+  RefundConflictError,
   UnknownDevGrantPackageError,
   USAGE_COSTS,
   chargeUsage,
@@ -112,6 +114,34 @@ test("refundUsageCharge is idempotent: replaying it does not refund twice", asyn
   assert.equal(summary.balance, FREE_GRANT_CREDITS);
 });
 
+test("refundUsageCharge rejects a requestId that was never charged, leaving the balance unchanged", async () => {
+  resetBilling();
+  await getBillingSummary("user-a");
+
+  await assert.rejects(
+    refundUsageCharge({ userId: "user-a", kind: "prompt", requestId: "never-charged", reason: "fabricated" }),
+    RefundConflictError,
+  );
+
+  const summary = await getBillingSummary("user-a");
+  assert.equal(summary.balance, FREE_GRANT_CREDITS);
+});
+
+test("refundUsageCharge rejects refunding a different user's charge", async () => {
+  resetBilling();
+  await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+
+  await assert.rejects(
+    refundUsageCharge({ userId: "user-b", kind: "prompt", requestId: "req-1", reason: "not my charge" }),
+    RefundConflictError,
+  );
+
+  const summaryA = await getBillingSummary("user-a");
+  const summaryB = await getBillingSummary("user-b");
+  assert.equal(summaryA.balance, FREE_GRANT_CREDITS - USAGE_COSTS["prompt"]!);
+  assert.equal(summaryB.balance, FREE_GRANT_CREDITS);
+});
+
 test("chargeUsage rejects replaying a requestId that was already refunded, instead of pretending success", async () => {
   resetBilling();
   await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
@@ -188,13 +218,16 @@ test("listBillingUsage clamps limit and offset to safe bounds", async () => {
 
 test("grantDevCredits is disabled unless BILLING_DEV_GRANTS=true", async () => {
   resetBilling();
-  await assert.rejects(grantDevCredits("user-a", "does-not-matter"), DevGrantsDisabledError);
+  await assert.rejects(grantDevCredits("user-a", "does-not-matter", "grant-key-1"), DevGrantsDisabledError);
 });
 
 test("grantDevCredits rejects package ids the server did not define", async () => {
   resetBilling();
   process.env["BILLING_DEV_GRANTS"] = "true";
-  await assert.rejects(grantDevCredits("user-a", "not-a-real-package"), UnknownDevGrantPackageError);
+  await assert.rejects(
+    grantDevCredits("user-a", "not-a-real-package", "grant-key-1"),
+    UnknownDevGrantPackageError,
+  );
 });
 
 test("grantDevCredits adds the server-defined package amount and is exposed in the summary", async () => {
@@ -204,7 +237,45 @@ test("grantDevCredits adds the server-defined package amount and is exposed in t
   const packageId = before.devGrantPackages[0]!.id;
   const packageCredits = before.devGrantPackages[0]!.credits;
 
-  const after = await grantDevCredits("user-a", packageId);
+  const after = await grantDevCredits("user-a", packageId, "grant-key-1");
 
   assert.equal(after.balance, before.balance + packageCredits);
+});
+
+test("grantDevCredits requires an Idempotency-Key", async () => {
+  resetBilling();
+  process.env["BILLING_DEV_GRANTS"] = "true";
+  const before = await getBillingSummary("user-a");
+  const packageId = before.devGrantPackages[0]!.id;
+
+  await assert.rejects(grantDevCredits("user-a", packageId, ""), MissingIdempotencyKeyError);
+});
+
+test("grantDevCredits replaying the same Idempotency-Key for the same user and package does not grant twice", async () => {
+  resetBilling();
+  process.env["BILLING_DEV_GRANTS"] = "true";
+  const before = await getBillingSummary("user-a");
+  const packageId = before.devGrantPackages[0]!.id;
+  const packageCredits = before.devGrantPackages[0]!.credits;
+
+  const first = await grantDevCredits("user-a", packageId, "grant-key-1");
+  const replay = await grantDevCredits("user-a", packageId, "grant-key-1");
+
+  assert.equal(first.balance, before.balance + packageCredits);
+  assert.equal(replay.balance, first.balance);
+});
+
+test("grantDevCredits scopes the same Idempotency-Key to the user and package so it cannot collide across them", async () => {
+  resetBilling();
+  process.env["BILLING_DEV_GRANTS"] = "true";
+  const packageA = DEV_GRANT_PACKAGES[0]!;
+  const packageB = DEV_GRANT_PACKAGES[1]!;
+
+  const userAGrant = await grantDevCredits("user-a", packageA.id, "shared-key");
+  const userBGrant = await grantDevCredits("user-b", packageA.id, "shared-key");
+  const userASecondPackageGrant = await grantDevCredits("user-a", packageB.id, "shared-key");
+
+  assert.equal(userAGrant.balance, FREE_GRANT_CREDITS + packageA.credits);
+  assert.equal(userBGrant.balance, FREE_GRANT_CREDITS + packageA.credits);
+  assert.equal(userASecondPackageGrant.balance, FREE_GRANT_CREDITS + packageA.credits + packageB.credits);
 });

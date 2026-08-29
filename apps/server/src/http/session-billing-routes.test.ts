@@ -133,7 +133,7 @@ test("POST /api/sessions/:id/prompt requires authentication once billing is enab
   await withServer(async (baseUrl) => {
     const created = await fetch(`${baseUrl}/api/sessions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
       body: JSON.stringify({ definitionId: "club-promo" }),
     });
     const { session } = (await created.json()) as { session: { id: string } };
@@ -143,6 +143,21 @@ test("POST /api/sessions/:id/prompt requires authentication once billing is enab
       headers: { "content-type": "application/json", "idempotency-key": "anon-prompt-1" },
       body: JSON.stringify({ text: "Make the hero more concise" }),
     });
+    assert.equal(response.status, 401);
+  });
+});
+
+test("POST /api/sessions requires authentication once billing is enabled", async () => {
+  configureSessionRepository(createMemorySessionRepository());
+  configureBillingStore(createMemoryBillingStore());
+
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ definitionId: "club-promo" }),
+    });
+
     assert.equal(response.status, 401);
   });
 });
@@ -222,7 +237,7 @@ test("POST /api/sessions/:id/edit requires authentication once billing is enable
   await withServer(async (baseUrl) => {
     const created = await fetch(`${baseUrl}/api/sessions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
       body: JSON.stringify({ definitionId: "club-promo" }),
     });
     const { session } = (await created.json()) as { session: { id: string } };
@@ -236,21 +251,21 @@ test("POST /api/sessions/:id/edit requires authentication once billing is enable
   });
 });
 
-test("POST /api/sessions/:id/edit does not require authentication when runAgent is false (no charge)", async () => {
+test("POST /api/sessions/:id/edit does not require idempotency when runAgent is false (no charge)", async () => {
   configureSessionRepository(createMemorySessionRepository());
   configureBillingStore(createMemoryBillingStore());
 
   await withServer(async (baseUrl) => {
     const created = await fetch(`${baseUrl}/api/sessions`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
       body: JSON.stringify({ definitionId: "club-promo" }),
     });
     const { session } = (await created.json()) as { session: { id: string } };
 
     const response = await fetch(`${baseUrl}/api/sessions/${session.id}/edit`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
       body: JSON.stringify({ intent: "Tighten the copy", patchStrategy: "refine", runAgent: false }),
     });
     assert.equal(response.status, 200);
@@ -295,5 +310,113 @@ test("POST /api/sessions/:id/edit replaying the same Idempotency-Key does not de
     });
     const summaryBody = (await summary.json()) as { balance: number };
     assert.equal(summaryBody.balance, FREE_GRANT_CREDITS - USAGE_COSTS["edit"]!);
+  });
+});
+
+test("POST /api/sessions/:id/approval requires authentication once billing is enabled", async () => {
+  configureSessionRepository(createMemorySessionRepository());
+  configureBillingStore(createMemoryBillingStore());
+
+  await withServer(async (baseUrl) => {
+    const created = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+      body: JSON.stringify({ definitionId: "club-promo" }),
+    });
+    const { session } = (await created.json()) as {
+      session: { id: string; viewModel: { pendingInteraction?: { id: string } } };
+    };
+    const interactionId = session.viewModel.pendingInteraction?.id;
+    assert.ok(interactionId, "session should start with a pending confirm interaction");
+
+    const response = await fetch(`${baseUrl}/api/sessions/${session.id}/approval`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ interactionId, decision: "approved" }),
+    });
+    assert.equal(response.status, 401);
+  });
+});
+
+test("POST /api/sessions/:id/approval executes for the authenticated owner without charging additional credits", async () => {
+  configureSessionRepository(createMemorySessionRepository());
+  configureBillingStore(createMemoryBillingStore());
+
+  await withServer(async (baseUrl) => {
+    const created = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+      body: JSON.stringify({ definitionId: "club-promo" }),
+    });
+    const { session } = (await created.json()) as {
+      session: { id: string; viewModel: { pendingInteraction?: { id: string } } };
+    };
+    const interactionId = session.viewModel.pendingInteraction?.id;
+
+    const response = await fetch(`${baseUrl}/api/sessions/${session.id}/approval`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+      body: JSON.stringify({ interactionId, decision: "approved" }),
+    });
+    assert.equal(response.status, 200);
+
+    const summary = await fetch(`${baseUrl}/api/billing/summary`, {
+      headers: { cookie: "ezu_session=valid-session" },
+    });
+    const summaryBody = (await summary.json()) as { balance: number };
+    assert.equal(summaryBody.balance, FREE_GRANT_CREDITS);
+  });
+});
+
+async function createApprovedSessionWithActionId(
+  baseUrl: string,
+): Promise<{ sessionId: string; actionId: string }> {
+  const created = await fetch(`${baseUrl}/api/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+    body: JSON.stringify({ definitionId: "club-promo" }),
+  });
+  const { session } = (await created.json()) as {
+    session: { id: string; viewModel: { pendingInteraction?: { id: string; actionId?: string } } };
+  };
+  const interaction = session.viewModel.pendingInteraction;
+  assert.ok(interaction?.actionId, "the confirm interaction should gate a specific action");
+
+  await fetch(`${baseUrl}/api/sessions/${session.id}/approval`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+    body: JSON.stringify({ interactionId: interaction.id, decision: "approved" }),
+  });
+
+  return { sessionId: session.id, actionId: interaction.actionId! };
+}
+
+test("POST /api/sessions/:id/actions/:actionId/retry requires authentication once billing is enabled", async () => {
+  configureSessionRepository(createMemorySessionRepository());
+  configureBillingStore(createMemoryBillingStore());
+
+  await withServer(async (baseUrl) => {
+    const { sessionId, actionId } = await createApprovedSessionWithActionId(baseUrl);
+
+    const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/actions/${actionId}/retry`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": "anon-retry-1" },
+    });
+    assert.equal(response.status, 401);
+  });
+});
+
+test("POST /api/sessions/:id/actions/:actionId/retry requires an Idempotency-Key once authenticated", async () => {
+  configureSessionRepository(createMemorySessionRepository());
+  configureBillingStore(createMemoryBillingStore());
+
+  await withServer(async (baseUrl) => {
+    const { sessionId, actionId } = await createApprovedSessionWithActionId(baseUrl);
+
+    const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/actions/${actionId}/retry`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+    });
+    assert.equal(response.status, 400);
   });
 });

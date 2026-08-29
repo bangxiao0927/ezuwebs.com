@@ -1,10 +1,12 @@
 import { bootstrapBlockEditDemo, executeApprovedBlockEdit } from "@ezu/agent";
 import { type ActionState, type AgentEvent } from "@ezu/protocol";
 
-import { chargeUsage, refundUsageCharge } from "./billing/billing-service.js";
+import { chargeUsage, isBillingEnabled, refundUsageCharge } from "./billing/billing-service.js";
 import {
   createDemoBootstrap,
+  DEMO_SESSION_DEFINITION_IDS,
   getDemoSessionDefinition,
+  UnknownSessionDefinitionError,
   type DemoSessionDefinition,
 } from "./demo.js";
 import { buildChoiceResolutionEvent, buildInputResolutionEvent } from "./interaction.js";
@@ -54,16 +56,42 @@ export class SessionNotFoundError extends Error {}
 export class InteractionConflictError extends Error {}
 export class ActionRetryConflictError extends Error {}
 export { InteractionValidationError } from "./interaction.js";
+export { UnknownSessionDefinitionError } from "./demo.js";
 export {
   InsufficientCreditsError,
   MissingIdempotencyKeyError,
   PreviousAttemptFailedError,
+  RefundConflictError,
 } from "./billing/billing-service.js";
 
 let sessionRepository = createMemorySessionRepository();
 
 export function configureSessionRepository(repository: SessionRepository): void {
   sessionRepository = repository;
+}
+
+const sessionLocks = new Map<string, Promise<void>>();
+
+/**
+ * Serializes mutating operations per session so concurrent requests (e.g. a
+ * double-submitted approval) cannot interleave reads and writes of the same
+ * record. Different sessions still run fully in parallel. A failed operation
+ * releases the lock instead of poisoning later calls for the same session.
+ */
+function withSessionLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+  const previous = sessionLocks.get(sessionId) ?? Promise.resolve();
+  const settled = previous.then(operation, operation);
+  const release = settled.then(
+    () => undefined,
+    () => undefined,
+  );
+  sessionLocks.set(sessionId, release);
+  void release.then(() => {
+    if (sessionLocks.get(sessionId) === release) {
+      sessionLocks.delete(sessionId);
+    }
+  });
+  return settled;
 }
 
 export async function recoverSessionsOnStartup(): Promise<void> {
@@ -127,11 +155,7 @@ function dropNoisyEvents(events: AgentEvent[]): AgentEvent[] {
 }
 
 export function listSessionDefinitions(): SessionSummaryDto[] {
-  return [
-    getDemoSessionDefinition("club-promo"),
-    getDemoSessionDefinition("agency-redesign"),
-    getDemoSessionDefinition("portfolio-dash"),
-  ].map(definitionToSummary);
+  return DEMO_SESSION_DEFINITION_IDS.map(getDemoSessionDefinition).map(definitionToSummary);
 }
 
 export async function createSession(definitionId: string, ownerUserId?: string): Promise<SessionDto> {
@@ -203,10 +227,12 @@ export async function selectBlock(
   blockId: string,
   requestingUserId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId, requestingUserId);
-  record.webEditor = selectInteractiveWebEditorBlock(record.webEditor, blockId);
-  await sessionRepository.save(record);
-  return toDto(record);
+  return withSessionLock(sessionId, async () => {
+    const record = await ensureSession(sessionId, requestingUserId);
+    record.webEditor = selectInteractiveWebEditorBlock(record.webEditor, blockId);
+    await sessionRepository.save(record);
+    return toDto(record);
+  });
 }
 
 export async function applyEdit(
@@ -220,69 +246,71 @@ export async function applyEdit(
   },
   requestingUserId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId, requestingUserId);
-  const shouldCharge = Boolean(requestingUserId) && input.runAgent !== false;
-  if (shouldCharge) {
-    const charge = await chargeUsage({
-      userId: requestingUserId!,
-      kind: "edit",
-      sessionId: record.id,
-      requestId: input.requestId ?? "",
-    });
-    if (!charge.applied) {
-      // Replayed request (e.g. a client retry): the edit already ran once, so
-      // return the current session state instead of running the agent again.
-      return toDto(record);
-    }
-  }
-
-  try {
-    const selectedState = createInteractiveWebEditorState(record.webEditor);
-    const blockId = selectedState.selectedBlockId ?? selectedState.blocks[0]?.id ?? "workbench";
-
-    let nextEditorState = createInteractiveWebEditorState(record.webEditor);
-    for (const property of input.properties ?? []) {
-      nextEditorState = upsertInteractiveWebEditorProperty(nextEditorState, property);
-    }
-
-    const request: InteractiveWebEditRequest = {
-      selection: {
-        blockId,
-        path: getWebEditorBlockFile(blockId),
-      },
-      intent: input.intent,
-      patchStrategy: input.patchStrategy,
-      ...(input.properties ? { properties: input.properties } : {}),
-    };
-
-    const response = createInteractiveWebEditResponse(request, nextEditorState);
-    record.webEditor = response.nextState;
-
-    if (input.runAgent !== false) {
-      const agentEvents = await bootstrapBlockEditDemo({
-        sessionId: record.id,
-        projectId: record.bootstrap.projectId,
-        blockId,
-        targetPath: getWebEditorBlockFile(blockId),
-        suggestedPrompt: response.suggestedPrompt,
-      });
-      record.events.push(...dropNoisyEvents(agentEvents));
-    }
-
-    await sessionRepository.save(record);
-    return toDto(record);
-  } catch (error) {
+  return withSessionLock(sessionId, async () => {
+    const record = await ensureSession(sessionId, requestingUserId);
+    const shouldCharge = isBillingEnabled() && Boolean(requestingUserId) && input.runAgent !== false;
     if (shouldCharge) {
-      await refundUsageCharge({
+      const charge = await chargeUsage({
         userId: requestingUserId!,
         kind: "edit",
         sessionId: record.id,
         requestId: input.requestId ?? "",
-        reason: "edit failed after charge",
       });
+      if (!charge.applied) {
+        // Replayed request (e.g. a client retry): the edit already ran once, so
+        // return the current session state instead of running the agent again.
+        return toDto(record);
+      }
     }
-    throw error;
-  }
+
+    try {
+      const selectedState = createInteractiveWebEditorState(record.webEditor);
+      const blockId = selectedState.selectedBlockId ?? selectedState.blocks[0]?.id ?? "workbench";
+
+      let nextEditorState = createInteractiveWebEditorState(record.webEditor);
+      for (const property of input.properties ?? []) {
+        nextEditorState = upsertInteractiveWebEditorProperty(nextEditorState, property);
+      }
+
+      const request: InteractiveWebEditRequest = {
+        selection: {
+          blockId,
+          path: getWebEditorBlockFile(blockId),
+        },
+        intent: input.intent,
+        patchStrategy: input.patchStrategy,
+        ...(input.properties ? { properties: input.properties } : {}),
+      };
+
+      const response = createInteractiveWebEditResponse(request, nextEditorState);
+      record.webEditor = response.nextState;
+
+      if (input.runAgent !== false) {
+        const agentEvents = await bootstrapBlockEditDemo({
+          sessionId: record.id,
+          projectId: record.bootstrap.projectId,
+          blockId,
+          targetPath: getWebEditorBlockFile(blockId),
+          suggestedPrompt: response.suggestedPrompt,
+        });
+        record.events.push(...dropNoisyEvents(agentEvents));
+      }
+
+      await sessionRepository.save(record);
+      return toDto(record);
+    } catch (error) {
+      if (shouldCharge) {
+        await refundUsageCharge({
+          userId: requestingUserId!,
+          kind: "edit",
+          sessionId: record.id,
+          requestId: input.requestId ?? "",
+          reason: "edit failed after charge",
+        });
+      }
+      throw error;
+    }
+  });
 }
 
 export async function sendPrompt(
@@ -291,71 +319,73 @@ export async function sendPrompt(
   requestingUserId?: string,
   requestId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId, requestingUserId);
-  const shouldCharge = Boolean(requestingUserId);
-  if (shouldCharge) {
-    const charge = await chargeUsage({
-      userId: requestingUserId!,
-      kind: "prompt",
-      sessionId: record.id,
-      requestId: requestId ?? "",
-    });
-    if (!charge.applied) {
-      // Replayed request (e.g. a client retry): the prompt already ran once, so
-      // return the current session state instead of running the agent again.
-      return toDto(record);
-    }
-  }
-
-  try {
-    const selectedEditor = createInteractiveWebEditorState(record.webEditor);
-    const blockId = selectedEditor.selectedBlockId ?? selectedEditor.blocks[0]?.id ?? "workbench";
-
-    const response = createInteractiveWebEditResponse(
-      {
-        selection: { blockId, path: getWebEditorBlockFile(blockId) },
-        intent: text,
-        patchStrategy: "refine",
-        properties: selectedEditor.properties,
-      },
-      selectedEditor,
-    );
-    record.webEditor = response.nextState;
-    const userMessageId = crypto.randomUUID();
-    record.events.push({
-      type: "message.delta",
-      messageId: userMessageId,
-      role: "user",
-      text,
-    });
-    record.events.push({
-      type: "message.completed",
-      messageId: userMessageId,
-    });
-
-    const agentEvents = await bootstrapBlockEditDemo({
-      sessionId: record.id,
-      projectId: record.bootstrap.projectId,
-      blockId,
-      targetPath: getWebEditorBlockFile(blockId),
-      suggestedPrompt: response.suggestedPrompt,
-    });
-    record.events.push(...dropNoisyEvents(agentEvents));
-
-    await sessionRepository.save(record);
-    return toDto(record);
-  } catch (error) {
+  return withSessionLock(sessionId, async () => {
+    const record = await ensureSession(sessionId, requestingUserId);
+    const shouldCharge = isBillingEnabled() && Boolean(requestingUserId);
     if (shouldCharge) {
-      await refundUsageCharge({
+      const charge = await chargeUsage({
         userId: requestingUserId!,
         kind: "prompt",
         sessionId: record.id,
         requestId: requestId ?? "",
-        reason: "prompt failed after charge",
       });
+      if (!charge.applied) {
+        // Replayed request (e.g. a client retry): the prompt already ran once, so
+        // return the current session state instead of running the agent again.
+        return toDto(record);
+      }
     }
-    throw error;
-  }
+
+    try {
+      const selectedEditor = createInteractiveWebEditorState(record.webEditor);
+      const blockId = selectedEditor.selectedBlockId ?? selectedEditor.blocks[0]?.id ?? "workbench";
+
+      const response = createInteractiveWebEditResponse(
+        {
+          selection: { blockId, path: getWebEditorBlockFile(blockId) },
+          intent: text,
+          patchStrategy: "refine",
+          properties: selectedEditor.properties,
+        },
+        selectedEditor,
+      );
+      record.webEditor = response.nextState;
+      const userMessageId = crypto.randomUUID();
+      record.events.push({
+        type: "message.delta",
+        messageId: userMessageId,
+        role: "user",
+        text,
+      });
+      record.events.push({
+        type: "message.completed",
+        messageId: userMessageId,
+      });
+
+      const agentEvents = await bootstrapBlockEditDemo({
+        sessionId: record.id,
+        projectId: record.bootstrap.projectId,
+        blockId,
+        targetPath: getWebEditorBlockFile(blockId),
+        suggestedPrompt: response.suggestedPrompt,
+      });
+      record.events.push(...dropNoisyEvents(agentEvents));
+
+      await sessionRepository.save(record);
+      return toDto(record);
+    } catch (error) {
+      if (shouldCharge) {
+        await refundUsageCharge({
+          userId: requestingUserId!,
+          kind: "prompt",
+          sessionId: record.id,
+          requestId: requestId ?? "",
+          reason: "prompt failed after charge",
+        });
+      }
+      throw error;
+    }
+  });
 }
 
 function findPendingInteraction(
@@ -402,59 +432,74 @@ export async function resolveApproval(
   reason: string,
   requestingUserId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId, requestingUserId);
-  const pending = findPendingInteraction(record.events, interactionId);
-  if (pending.interaction.type !== "confirm") {
-    throw new InteractionConflictError("This interaction requires a choice or text response");
-  }
+  return withSessionLock(sessionId, async () => {
+    const record = await ensureSession(sessionId, requestingUserId);
+    const pending = findPendingInteraction(record.events, interactionId);
+    if (pending.interaction.type !== "confirm") {
+      throw new InteractionConflictError("This interaction requires a choice or text response");
+    }
 
-  const gatedAction = pending.interaction.actionId
-    ? findActionState(record.events, pending.interaction.actionId)
-    : undefined;
+    const gatedAction = pending.interaction.actionId
+      ? findActionState(record.events, pending.interaction.actionId)
+      : undefined;
 
-  record.events.push({
-    type: "interaction.resolved",
-    interactionId: pending.interaction.id,
-    status: decision,
-    title: pending.interaction.title,
-    summary:
-      decision === "approved"
-        ? `Approved: ${pending.interaction.summary}`
-        : `Rejected: ${pending.interaction.summary}`,
-    ...(decision === "rejected"
-      ? { rejectionReason: reason, followUpStrategy: "replace_structure" as const }
-      : {}),
-  });
+    record.events.push({
+      type: "interaction.resolved",
+      interactionId: pending.interaction.id,
+      status: decision,
+      title: pending.interaction.title,
+      summary:
+        decision === "approved"
+          ? `Approved: ${pending.interaction.summary}`
+          : `Rejected: ${pending.interaction.summary}`,
+      ...(decision === "rejected"
+        ? { rejectionReason: reason, followUpStrategy: "replace_structure" as const }
+        : {}),
+    });
 
-  if (decision === "approved") {
-    if (gatedAction && gatedAction.status === "pending") {
-      const executionEvents = await executeApprovedBlockEdit({
+    let runningAction: ActionState | undefined;
+    if (decision === "approved") {
+      if (gatedAction && gatedAction.status === "pending") {
+        runningAction = { ...gatedAction, status: "running", updatedAt: new Date().toISOString() };
+        record.events.push({ type: "action.updated", action: runningAction });
+      }
+    } else {
+      if (gatedAction && gatedAction.status === "pending") {
+        record.events.push({
+          type: "action.updated",
+          action: { ...gatedAction, status: "cancelled", updatedAt: new Date().toISOString() },
+        });
+      }
+
+      const selectedEditor = createInteractiveWebEditorState(record.webEditor);
+      record.webEditor = {
+        ...selectedEditor,
+        suggestedPrompt: createReplacementPrompt(
+          selectedEditor.suggestedPrompt ?? "Replace the current patch.",
+          reason,
+        ),
+      };
+    }
+
+    // Persist the resolution and the running marker before running the side
+    // effect: a failure here must stop us from executing an action that a
+    // restart could not tell was ever approved.
+    await sessionRepository.save(record);
+
+    if (runningAction) {
+      const result = await executeApprovedBlockEdit({
         sessionId: record.id,
         projectId: record.bootstrap.projectId,
-        action: gatedAction,
+        action: runningAction,
+        ...(record.bootstrap.workspaceFiles ? { workspaceFiles: record.bootstrap.workspaceFiles } : {}),
       });
-      record.events.push(...dropNoisyEvents(executionEvents));
-    }
-  } else {
-    if (gatedAction && gatedAction.status === "pending") {
-      record.events.push({
-        type: "action.updated",
-        action: { ...gatedAction, status: "cancelled", updatedAt: new Date().toISOString() },
-      });
+      record.events.push(...dropNoisyEvents(result.events));
+      record.bootstrap = { ...record.bootstrap, workspaceFiles: result.workspaceFiles };
+      await sessionRepository.save(record);
     }
 
-    const selectedEditor = createInteractiveWebEditorState(record.webEditor);
-    record.webEditor = {
-      ...selectedEditor,
-      suggestedPrompt: createReplacementPrompt(
-        selectedEditor.suggestedPrompt ?? "Replace the current patch.",
-        reason,
-      ),
-    };
-  }
-
-  await sessionRepository.save(record);
-  return toDto(record);
+    return toDto(record);
+  });
 }
 
 export async function resolveChoiceInteraction(
@@ -463,15 +508,17 @@ export async function resolveChoiceInteraction(
   optionId: string,
   requestingUserId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId, requestingUserId);
-  const pending = findPendingInteraction(record.events, interactionId);
-  if (pending.interaction.type !== "choice") {
-    throw new InteractionConflictError("This interaction requires an approval decision");
-  }
+  return withSessionLock(sessionId, async () => {
+    const record = await ensureSession(sessionId, requestingUserId);
+    const pending = findPendingInteraction(record.events, interactionId);
+    if (pending.interaction.type !== "choice") {
+      throw new InteractionConflictError("This interaction requires an approval decision");
+    }
 
-  record.events.push(buildChoiceResolutionEvent(pending.interaction, optionId));
-  await sessionRepository.save(record);
-  return toDto(record);
+    record.events.push(buildChoiceResolutionEvent(pending.interaction, optionId));
+    await sessionRepository.save(record);
+    return toDto(record);
+  });
 }
 
 export async function resolveInputInteraction(
@@ -480,52 +527,91 @@ export async function resolveInputInteraction(
   value: string,
   requestingUserId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId, requestingUserId);
-  const pending = findPendingInteraction(record.events, interactionId);
-  if (pending.interaction.type !== "input") {
-    throw new InteractionConflictError("This interaction requires an approval decision");
-  }
+  return withSessionLock(sessionId, async () => {
+    const record = await ensureSession(sessionId, requestingUserId);
+    const pending = findPendingInteraction(record.events, interactionId);
+    if (pending.interaction.type !== "input") {
+      throw new InteractionConflictError("This interaction requires an approval decision");
+    }
 
-  record.events.push(buildInputResolutionEvent(pending.interaction, value));
-  await sessionRepository.save(record);
-  return toDto(record);
+    record.events.push(buildInputResolutionEvent(pending.interaction, value));
+    await sessionRepository.save(record);
+    return toDto(record);
+  });
 }
 
 export async function retryAction(
   sessionId: string,
   actionId: string,
   requestingUserId?: string,
+  requestId?: string,
 ): Promise<SessionDto> {
-  const record = await ensureSession(sessionId, requestingUserId);
-  const current = findActionState(record.events, actionId);
+  return withSessionLock(sessionId, async () => {
+    const record = await ensureSession(sessionId, requestingUserId);
+    const current = findActionState(record.events, actionId);
 
-  if (!current) {
-    throw new ActionRetryConflictError(`Unknown action: ${actionId}`);
-  }
+    if (!current) {
+      throw new ActionRetryConflictError(`Unknown action: ${actionId}`);
+    }
 
-  if (current.status === "completed") {
-    throw new ActionRetryConflictError("This action already completed and cannot be retried");
-  }
+    const shouldCharge = isBillingEnabled() && Boolean(requestingUserId);
+    if (shouldCharge) {
+      const charge = await chargeUsage({
+        userId: requestingUserId!,
+        kind: "retry",
+        sessionId: record.id,
+        requestId: requestId ?? "",
+      });
+      if (!charge.applied) {
+        // Replayed request (e.g. a client retry): the retry already ran once, so
+        // return the current session state instead of running the agent again.
+        return toDto(record);
+      }
+    }
 
-  if (current.status !== "failed") {
-    throw new ActionRetryConflictError(`Action is not in a retryable state: ${current.status}`);
-  }
+    try {
+      if (current.status === "completed") {
+        throw new ActionRetryConflictError("This action already completed and cannot be retried");
+      }
+      if (current.status !== "failed") {
+        throw new ActionRetryConflictError(`Action is not in a retryable state: ${current.status}`);
+      }
 
-  const { error: _previousError, ...currentWithoutError } = current;
-  const retryingAction: ActionState = {
-    ...currentWithoutError,
-    status: "pending",
-    updatedAt: new Date().toISOString(),
-  };
-  record.events.push({ type: "action.updated", action: retryingAction });
+      const { error: _previousError, ...currentWithoutError } = current;
+      const runningAction: ActionState = {
+        ...currentWithoutError,
+        status: "running",
+        updatedAt: new Date().toISOString(),
+      };
+      record.events.push({ type: "action.updated", action: runningAction });
 
-  const executionEvents = await executeApprovedBlockEdit({
-    sessionId: record.id,
-    projectId: record.bootstrap.projectId,
-    action: retryingAction,
+      // Persist the running marker before executing: a restart while this
+      // action is in flight must recover it as failed/retryable rather than
+      // silently leaving it in a state nothing will ever reconcile.
+      await sessionRepository.save(record);
+
+      const result = await executeApprovedBlockEdit({
+        sessionId: record.id,
+        projectId: record.bootstrap.projectId,
+        action: runningAction,
+        ...(record.bootstrap.workspaceFiles ? { workspaceFiles: record.bootstrap.workspaceFiles } : {}),
+      });
+      record.events.push(...dropNoisyEvents(result.events));
+      record.bootstrap = { ...record.bootstrap, workspaceFiles: result.workspaceFiles };
+
+      await sessionRepository.save(record);
+      return toDto(record);
+    } catch (error) {
+      if (shouldCharge) {
+        await refundUsageCharge({
+          userId: requestingUserId!,
+          kind: "retry",
+          sessionId: record.id,
+          requestId: requestId ?? "",
+          reason: "retry failed after charge",
+        });
+      }
+      throw error;
+    }
   });
-  record.events.push(...dropNoisyEvents(executionEvents));
-
-  await sessionRepository.save(record);
-  return toDto(record);
 }

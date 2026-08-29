@@ -159,6 +159,8 @@ function handleGeneratePrompt(): void {
       <canvas
         ref="canvasRef"
         class="scratch-canvas"
+        role="img"
+        aria-label="Scratch sketch canvas for freehand prototype notes"
         @pointerdown="handlePointerDown"
         @pointermove="handlePointerMove"
         @pointerup="endStroke"

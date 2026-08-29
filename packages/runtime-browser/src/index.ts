@@ -19,8 +19,10 @@ function createPreviewUrl(html: string): string {
 function renderRuntimePreviewDocument(input: {
   files: Array<{ path: string; content: string }>;
   port: number;
+  activePath?: string;
 }): string {
-  const latestFile = input.files.at(-1);
+  const latestFile =
+    input.files.find((file) => file.path === input.activePath) ?? input.files.at(-1);
   const latestContent = latestFile?.content ?? "No file content has been written into the browser container yet.";
   const latestPath = latestFile?.path ?? "No active file";
   const lines = latestContent.length === 0 ? 0 : latestContent.split("\n").length;
@@ -440,12 +442,17 @@ class BrowserRuntimeProcess implements RuntimeProcess {
 }
 
 export class BrowserRuntimeStub implements RuntimeAdapter {
-  private readonly files = new Map<string, string>();
+  private readonly files: Map<string, string>;
+  private activePath: string | undefined;
   private readonly fileWatchers = new Set<(event: { path: string; type: string }) => void>();
   private readonly portWatchers = new Set<
     (event: { port: number; url: string; status: "open" | "close" }) => void
   >();
   private readonly openPorts = new Map<number, string>();
+
+  constructor(seedFiles: Array<{ path: string; content: string }> = []) {
+    this.files = new Map(seedFiles.map((file) => [file.path, file.content]));
+  }
 
   async readFile(path: string): Promise<string> {
     return this.files.get(path) ?? "";
@@ -453,6 +460,7 @@ export class BrowserRuntimeStub implements RuntimeAdapter {
 
   async writeFile(path: string, content: string): Promise<void> {
     this.files.set(path, content);
+    this.activePath = path;
     this.emitFileEvent({ path, type: "write" });
     this.refreshOpenPreviews();
   }
@@ -460,6 +468,7 @@ export class BrowserRuntimeStub implements RuntimeAdapter {
   async patchFile(path: string, patch: string): Promise<void> {
     const current = this.files.get(path) ?? "";
     this.files.set(path, `${current}\n${patch}`.trim());
+    this.activePath = path;
     this.emitFileEvent({ path, type: "patch" });
     this.refreshOpenPreviews();
   }
@@ -506,6 +515,7 @@ export class BrowserRuntimeStub implements RuntimeAdapter {
           .sort(([left], [right]) => left.localeCompare(right))
           .map(([path, content]) => ({ path, content })),
         port,
+        ...(this.activePath ? { activePath: this.activePath } : {}),
       }),
     );
 
@@ -559,6 +569,8 @@ export class BrowserRuntimeStub implements RuntimeAdapter {
   }
 }
 
-export function createBrowserRuntimeStub(): RuntimeAdapter {
-  return new BrowserRuntimeStub();
+export function createBrowserRuntimeStub(
+  seedFiles: Array<{ path: string; content: string }> = [],
+): RuntimeAdapter {
+  return new BrowserRuntimeStub(seedFiles);
 }

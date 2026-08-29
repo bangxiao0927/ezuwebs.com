@@ -133,6 +133,75 @@ export function debitLedgerIfSufficient(
   });
 }
 
+export interface DebitAndRecordUsageInput {
+  userId: string;
+  credits: number;
+  reason: string;
+  idempotencyKey: string;
+  usageEvent: InsertUsageEventInput;
+}
+
+export interface DebitAndRecordUsageResult {
+  applied: boolean;
+  sufficient: boolean;
+  balance: number;
+}
+
+/**
+ * Debits credits and records the matching usage event in a single
+ * transaction, so a crash between the two can never leave a debited
+ * balance with no usage record (or vice versa).
+ */
+export function debitAndRecordUsage(
+  db: EzuDb,
+  input: DebitAndRecordUsageInput,
+): DebitAndRecordUsageResult {
+  return db.transaction((tx) => {
+    const existing = tx
+      .select({ id: creditLedger.id })
+      .from(creditLedger)
+      .where(eq(creditLedger.idempotencyKey, input.idempotencyKey))
+      .get();
+    if (existing) {
+      return { applied: false, sufficient: true, balance: ledgerBalance(tx, input.userId) };
+    }
+
+    const balance = ledgerBalance(tx, input.userId);
+    if (balance < input.credits) {
+      return { applied: false, sufficient: false, balance };
+    }
+
+    tx.insert(creditLedger)
+      .values({
+        id: crypto.randomUUID(),
+        userId: input.userId,
+        type: "debit",
+        amount: -input.credits,
+        reason: input.reason,
+        idempotencyKey: input.idempotencyKey,
+        createdAt: new Date(),
+      })
+      .run();
+
+    tx.insert(usageEvents)
+      .values({
+        id: input.usageEvent.id,
+        userId: input.usageEvent.userId,
+        kind: input.usageEvent.kind,
+        units: input.usageEvent.units,
+        credits: input.usageEvent.credits,
+        model: input.usageEvent.model ?? null,
+        sessionId: input.usageEvent.sessionId ?? null,
+        status: input.usageEvent.status ?? "succeeded",
+        createdAt: new Date(),
+      })
+      .onConflictDoNothing()
+      .run();
+
+    return { applied: true, sufficient: true, balance: balance - input.credits };
+  });
+}
+
 export interface InsertUsageEventInput {
   id: string;
   userId: string;
@@ -191,7 +260,7 @@ export function listUsageEvents(
     .select()
     .from(usageEvents)
     .where(eq(usageEvents.userId, userId))
-    .orderBy(desc(usageEvents.createdAt))
+    .orderBy(desc(usageEvents.createdAt), desc(usageEvents.id))
     .limit(options.limit)
     .offset(options.offset)
     .all();

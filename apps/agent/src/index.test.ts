@@ -96,18 +96,46 @@ test("executeApprovedBlockEdit runs the approved action exactly once and opens a
   );
   assert.ok(createdAction && createdAction.type === "action.created");
 
-  const executionEvents = await executeApprovedBlockEdit({
+  const execution = await executeApprovedBlockEdit({
     sessionId: "gating-session-2",
     projectId: "gating-project-2",
     action: createdAction.action,
   });
 
-  const updates = executionEvents.filter(
+  const updates = execution.events.filter(
     (event) => event.type === "action.updated" && event.action.id === createdAction.action.id,
   );
   assert.equal(updates.length, 1, "the approved action should run exactly once");
   assert.ok(updates[0]?.type === "action.updated" && updates[0].action.status === "completed");
 
-  const previewReady = executionEvents.some((event) => event.type === "preview.ready");
+  const previewReady = execution.events.some((event) => event.type === "preview.ready");
   assert.ok(previewReady, "approval should open a preview after execution");
+});
+
+test("executeApprovedBlockEdit seeds the runtime with the session's existing workspace files", async () => {
+  const events = await bootstrapBlockEditDemo({
+    sessionId: "seed-session",
+    projectId: "seed-project",
+    blockId: "hero",
+    targetPath: "src/App.tsx",
+    suggestedPrompt: "Refine the hero block copy.",
+  });
+  const createdAction = events.find(
+    (event) => event.type === "action.created" && event.action.action.type === "file.patch",
+  );
+  assert.ok(createdAction && createdAction.type === "action.created");
+
+  const execution = await executeApprovedBlockEdit({
+    sessionId: "seed-session",
+    projectId: "seed-project",
+    action: createdAction.action,
+    workspaceFiles: [{ path: "README.md", content: "# Existing project" }],
+  });
+
+  const readme = execution.workspaceFiles.find((file) => file.path === "README.md");
+  assert.ok(readme, "pre-existing workspace files should still be present after execution");
+  assert.equal(readme?.content, "# Existing project");
+
+  const patchedFile = execution.workspaceFiles.find((file) => file.path === "src/App.tsx");
+  assert.ok(patchedFile, "the successfully patched file should be synced back into workspace files");
 });

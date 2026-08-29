@@ -4,6 +4,8 @@ import type {
   AppendGrantInput,
   AppendGrantResult,
   BillingStore,
+  DebitAndRecordUsageInput,
+  DebitAndRecordUsageResult,
   DebitInput,
   DebitResult,
   ListUsageEventsResult,
@@ -57,6 +59,17 @@ export function createSqliteBillingStore(options: OpenDatabaseOptions = {}): Bil
     async debitIfSufficient(input: DebitInput): Promise<DebitResult> {
       const [db, { debitLedgerIfSufficient }] = await Promise.all([getDb(), import("@ezu/db")]);
       return debitLedgerIfSufficient(db, input);
+    },
+
+    async debitAndRecordUsage(input: DebitAndRecordUsageInput): Promise<DebitAndRecordUsageResult> {
+      const [db, { debitAndRecordUsage }] = await Promise.all([getDb(), import("@ezu/db")]);
+      return debitAndRecordUsage(db, {
+        userId: input.userId,
+        credits: input.credits,
+        reason: input.debitReason,
+        idempotencyKey: input.debitIdempotencyKey,
+        usageEvent: input.usageEvent,
+      });
     },
 
     async refundDebit(input: RefundDebitInput): Promise<RefundDebitResult> {

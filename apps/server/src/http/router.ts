@@ -3,9 +3,11 @@ import { type IncomingMessage, type ServerResponse } from "node:http";
 import type { AuthServicePort } from "./auth-routes.js";
 import { handleAuthRoute } from "./auth-routes.js";
 import { handleBillingRoute } from "./billing-routes.js";
-import { readJsonBody } from "./body.js";
+import { MAX_JSON_BODY_BYTES, PayloadTooLargeError, readJsonBody } from "./body.js";
 import { parseCookies } from "./cookies.js";
-import { isBillingEnabled } from "../domain/billing/billing-service.js";
+import { corsHeaders, resolveAllowedOrigin } from "./cors.js";
+import { resolveRequestId } from "./idempotency.js";
+import { isBillingEnabled, RefundConflictError } from "../domain/billing/billing-service.js";
 import {
   applyEdit,
   createSession,
@@ -23,6 +25,7 @@ import {
   MissingIdempotencyKeyError,
   PreviousAttemptFailedError,
   SessionNotFoundError,
+  UnknownSessionDefinitionError,
   selectBlock,
   sendPrompt,
 } from "../domain/sessions.js";
@@ -34,13 +37,17 @@ interface JsonError {
   error: string;
 }
 
-function sendJson(response: ServerResponse, status: number, payload: unknown): void {
+function sendJsonWithCors(
+  response: ServerResponse,
+  status: number,
+  payload: unknown,
+  allowedOrigin: string | undefined,
+): void {
   const body = JSON.stringify(payload);
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
-    "access-control-allow-origin": "*",
-    "access-control-allow-headers": "content-type",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "cache-control": "no-store",
+    ...corsHeaders(allowedOrigin),
   });
   response.end(body);
 }
@@ -81,10 +88,12 @@ async function resolveCurrentUserId(
 }
 
 /**
- * Resolves the signed-in user for a billed action (edit/prompt). Unlike
- * `resolveCurrentUserId`, auth resolution failures are never swallowed into
- * "anonymous": when billing is enabled, a broken auth service must surface as
- * an error, not silently bypass the credit charge.
+ * Resolves the signed-in user for a billed action (edit/prompt/retry) or for
+ * creating a session, which is gated the same way to stop anonymous storage
+ * abuse once billing is enabled. Unlike `resolveCurrentUserId`, auth
+ * resolution failures are never swallowed into "anonymous" here: when
+ * billing is enabled, a broken auth service must surface as an error, not
+ * silently bypass the boundary.
  */
 async function resolveCurrentUserIdForBilledAction(
   request: IncomingMessage,
@@ -99,27 +108,43 @@ async function resolveCurrentUserIdForBilledAction(
   return user?.id;
 }
 
-function resolveRequestId(request: IncomingMessage, body: { requestId?: string }): string | undefined {
-  const header = request.headers["idempotency-key"];
-  const headerValue = Array.isArray(header) ? header[0] : header;
-  if (typeof headerValue === "string" && headerValue.trim()) {
-    return headerValue.trim();
-  }
-  if (typeof body.requestId === "string" && body.requestId.trim()) {
-    return body.requestId.trim();
-  }
-  return undefined;
+function errorStatus(error: unknown): number {
+  if (error instanceof PayloadTooLargeError) return 413;
+  if (error instanceof SessionNotFoundError) return 404;
+  if (error instanceof UnknownSessionDefinitionError) return 400;
+  if (error instanceof InteractionConflictError) return 409;
+  if (error instanceof InteractionValidationError) return 400;
+  if (error instanceof ActionRetryConflictError) return 409;
+  if (error instanceof InsufficientCreditsError) return 402;
+  if (error instanceof MissingIdempotencyKeyError) return 400;
+  if (error instanceof PreviousAttemptFailedError) return 409;
+  if (error instanceof RefundConflictError) return 409;
+  return 500;
 }
 
 export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler {
   return async (request, response) => {
+    const originHeader = request.headers.origin;
+    const allowedOrigin = resolveAllowedOrigin(typeof originHeader === "string" ? originHeader : undefined);
+    const sendJson = (res: ServerResponse, status: number, payload: unknown): void =>
+      sendJsonWithCors(res, status, payload, allowedOrigin);
+
     try {
       const method = request.method ?? "GET";
       const url = new URL(request.url ?? "/", "http://localhost");
       const segments = url.pathname.split("/").filter(Boolean);
 
       if (method === "OPTIONS") {
-        sendJson(response, 204, {});
+        response.writeHead(204, {
+          ...corsHeaders(allowedOrigin),
+          ...(allowedOrigin
+            ? {
+                "access-control-allow-headers": "content-type, idempotency-key",
+                "access-control-allow-methods": "GET,POST,OPTIONS",
+              }
+            : {}),
+        });
+        response.end();
         return;
       }
 
@@ -172,8 +197,12 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
 
       // POST /api/sessions { definitionId }
       if (segments.length === 2 && segments[1] === "sessions" && method === "POST") {
-        const body = await readJsonBody<{ definitionId?: string }>(request);
-        const currentUserId = await resolveCurrentUserId(request, options);
+        const body = await readJsonBody<{ definitionId?: string }>(request, MAX_JSON_BODY_BYTES);
+        const currentUserId = await resolveCurrentUserIdForBilledAction(request, options);
+        if (isBillingEnabled() && !currentUserId) {
+          sendJson(response, 401, { error: "Authentication required" } satisfies JsonError);
+          return;
+        }
         const session = await createSession(body.definitionId ?? "club-promo", currentUserId);
         sendJson(response, 201, { session });
         return;
@@ -273,13 +302,21 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
             sendJson(response, 400, { error: "interactionId and a valid decision are required" });
             return;
           }
+          // Approving executes real agent work, so it must go through the
+          // same auth boundary as the prompt/edit that created it, even
+          // though the credit for that work was already charged there.
+          const billedCurrentUserId = await resolveCurrentUserIdForBilledAction(request, options);
+          if (isBillingEnabled() && !billedCurrentUserId) {
+            sendJson(response, 401, { error: "Authentication required" } satisfies JsonError);
+            return;
+          }
           const decision = body.decision as "approved" | "rejected";
           const session = await resolveApproval(
             sessionId,
             body.interactionId,
             decision,
             body.reason ?? "Replacement requested.",
-            currentUserId,
+            billedCurrentUserId,
           );
           sendJson(response, 200, { session });
           return;
@@ -321,30 +358,28 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
 
         if (action === "actions" && segments[5] === "retry" && method === "POST") {
           const actionId = decodeURIComponent(segments[4]!);
-          sendJson(response, 200, { session: await retryAction(sessionId, actionId, currentUserId) });
+          const body = await readJsonBody<{ requestId?: string }>(request);
+          const billedCurrentUserId = await resolveCurrentUserIdForBilledAction(request, options);
+          if (isBillingEnabled() && !billedCurrentUserId) {
+            sendJson(response, 401, { error: "Authentication required" } satisfies JsonError);
+            return;
+          }
+          const requestId = resolveRequestId(request, body);
+          if (isBillingEnabled() && billedCurrentUserId && !requestId) {
+            sendJson(response, 400, {
+              error: "An Idempotency-Key header or requestId is required",
+            } satisfies JsonError);
+            return;
+          }
+          const session = await retryAction(sessionId, actionId, billedCurrentUserId, requestId);
+          sendJson(response, 200, { session });
           return;
         }
       }
 
       sendJson(response, 404, { error: "Not found" } satisfies JsonError);
     } catch (error) {
-      const status =
-        error instanceof SessionNotFoundError
-          ? 404
-          : error instanceof InteractionConflictError
-            ? 409
-            : error instanceof InteractionValidationError
-              ? 400
-            : error instanceof ActionRetryConflictError
-              ? 409
-            : error instanceof InsufficientCreditsError
-              ? 402
-            : error instanceof MissingIdempotencyKeyError
-              ? 400
-            : error instanceof PreviousAttemptFailedError
-              ? 409
-            : 500;
-      sendJson(response, status, {
+      sendJson(response, errorStatus(error), {
         error: error instanceof Error ? error.message : "Internal server error",
       } satisfies JsonError);
     }

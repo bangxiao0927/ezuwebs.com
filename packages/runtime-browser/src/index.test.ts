@@ -36,3 +36,36 @@ test("file changes refresh an open preview and notify port watchers", async () =
   assert.notEqual(latest.url, first.url);
   assert.match(decodePreview(latest.url), /Second revision/);
 });
+
+test("a seeded runtime previews the file most recently changed, not the last sorted path", async () => {
+  const runtime = new BrowserRuntimeStub([
+    { path: "src/App.tsx", content: "old app" },
+    { path: "tsconfig.json", content: "should not be the active preview" },
+  ]);
+
+  await runtime.patchFile("src/App.tsx", "updated app");
+  const preview = await runtime.openPreview(4174);
+  const html = decodePreview(preview.url);
+
+  assert.match(html, /src\/App\.tsx/);
+  assert.match(html, /updated app/);
+  assert.doesNotMatch(html, /<h1>tsconfig\.json<\/h1>/);
+});
+
+test("seeded files are readable and listed without any writes", async () => {
+  const runtime = new BrowserRuntimeStub([
+    { path: "src/App.tsx", content: "export const App = 1;" },
+    { path: "README.md", content: "# Hello" },
+  ]);
+
+  assert.equal(await runtime.readFile("src/App.tsx"), "export const App = 1;");
+  assert.deepEqual(await runtime.listFiles(""), ["README.md", "src/App.tsx"]);
+});
+
+test("patching a seeded file preserves its prior content instead of starting from empty", async () => {
+  const runtime = new BrowserRuntimeStub([{ path: "src/App.tsx", content: "const seeded = true;" }]);
+
+  await runtime.patchFile("src/App.tsx", "// appended patch");
+
+  assert.equal(await runtime.readFile("src/App.tsx"), "const seeded = true;\n// appended patch");
+});

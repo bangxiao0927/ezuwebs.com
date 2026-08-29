@@ -3,8 +3,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthServicePort } from "./auth-routes.js";
 import { readJsonBody } from "./body.js";
 import { parseCookies } from "./cookies.js";
+import { resolveRequestId } from "./idempotency.js";
 import {
   DevGrantsDisabledError,
+  MissingIdempotencyKeyError,
   UnknownDevGrantPackageError,
   getBillingSummary,
   grantDevCredits,
@@ -61,15 +63,24 @@ export async function handleBillingRoute(
   }
 
   if (segments.length === 3 && segments[2] === "dev-grant" && method === "POST") {
-    const body = await readJsonBody<{ packageId?: string }>(request);
+    const body = await readJsonBody<{ packageId?: string; requestId?: string }>(request);
+    const idempotencyKey = resolveRequestId(request, body);
+    if (!idempotencyKey) {
+      sendJson(response, 400, { error: "An Idempotency-Key header or requestId is required" });
+      return true;
+    }
     try {
-      sendJson(response, 200, await grantDevCredits(user.id, body.packageId ?? ""));
+      sendJson(response, 200, await grantDevCredits(user.id, body.packageId ?? "", idempotencyKey));
     } catch (error) {
       if (error instanceof DevGrantsDisabledError) {
         sendJson(response, 404, { error: "Not found" });
         return true;
       }
       if (error instanceof UnknownDevGrantPackageError) {
+        sendJson(response, 400, { error: error.message });
+        return true;
+      }
+      if (error instanceof MissingIdempotencyKeyError) {
         sendJson(response, 400, { error: error.message });
         return true;
       }

@@ -67,10 +67,26 @@ export interface ListUsageEventsResult {
   totalCreditsConsumed: number;
 }
 
+export interface DebitAndRecordUsageInput {
+  userId: string;
+  credits: number;
+  debitReason: string;
+  debitIdempotencyKey: string;
+  usageEvent: UsageEventInput;
+}
+
+export interface DebitAndRecordUsageResult {
+  applied: boolean;
+  sufficient: boolean;
+  balance: number;
+}
+
 /** Persistence boundary for billing so the sqlite-backed implementation can be swapped for a fake in tests. */
 export interface BillingStore {
   appendGrant(input: AppendGrantInput): Promise<AppendGrantResult>;
   debitIfSufficient(input: DebitInput): Promise<DebitResult>;
+  /** Debits credits and records the matching usage event as a single atomic operation. */
+  debitAndRecordUsage(input: DebitAndRecordUsageInput): Promise<DebitAndRecordUsageResult>;
   refundDebit(input: RefundDebitInput): Promise<RefundDebitResult>;
   getBalance(userId: string): Promise<number>;
   insertUsageEvent(input: UsageEventInput): Promise<void>;
@@ -94,3 +110,5 @@ export class UnknownDevGrantPackageError extends Error {}
 export class MissingIdempotencyKeyError extends Error {}
 /** A prior attempt for this requestId ran and was refunded; retrying with the same requestId is refused. */
 export class PreviousAttemptFailedError extends Error {}
+/** A refund was requested for a requestId that was never successfully charged. */
+export class RefundConflictError extends Error {}
