@@ -1,6 +1,8 @@
 import { type ActionState, type AgentEvent } from "@ezu/protocol";
 
-const IN_PROGRESS_STATUSES: ReadonlySet<ActionState["status"]> = new Set(["pending", "running"]);
+// Pending actions may be intentionally waiting for user approval; only work
+// that actually started can be considered interrupted by a restart.
+const IN_PROGRESS_STATUSES: ReadonlySet<ActionState["status"]> = new Set(["running"]);
 
 /**
  * Given the last known state of every action in a session, produces the events

@@ -58,3 +58,46 @@ export function createMemorySessionRepository(): SessionRepository {
     },
   };
 }
+
+export async function createFileSessionRepository(filePath: string): Promise<SessionRepository> {
+  const memory = createMemorySessionRepository();
+  let writeChain = Promise.resolve();
+  let writeSequence = 0;
+
+  try {
+    const stored = JSON.parse(await fs.readFile(filePath, "utf8")) as SessionRecord[];
+    for (const record of stored) await memory.create(record);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  async function flush(): Promise<void> {
+    writeChain = writeChain.then(async () => {
+      const records = await memory.list();
+      await fs.mkdir(path.dirname(path.resolve(filePath)), { recursive: true });
+      const temporaryPath = `${filePath}.${process.pid}.${writeSequence++}.tmp`;
+      await fs.writeFile(temporaryPath, JSON.stringify(records), "utf8");
+      await fs.rename(temporaryPath, filePath);
+    });
+    await writeChain;
+  }
+
+  return {
+    async create(record) {
+      await memory.create(record);
+      await flush();
+    },
+    get: (id) => memory.get(id),
+    async save(record) {
+      await memory.save(record);
+      await flush();
+    },
+    list: () => memory.list(),
+    async recoverInterruptedSessions() {
+      await memory.recoverInterruptedSessions();
+      await flush();
+    },
+  };
+}
+import fs from "node:fs/promises";
+import path from "node:path";

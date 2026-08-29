@@ -1,10 +1,16 @@
 import { createServer } from "node:http";
 
+import { createFileSessionRepository } from "./domain/session-repository.js";
+import { configureSessionRepository, recoverSessionsOnStartup } from "./domain/sessions.js";
 import { createApiHandler } from "./http/router.js";
-import { recoverSessionsOnStartup } from "./domain/sessions.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4175", 10);
 const host = process.env.HOST ?? "127.0.0.1";
+
+const sessionRepository = await createFileSessionRepository(
+  process.env.SESSION_STORE_FILE ?? "./data/sessions.json",
+);
+configureSessionRepository(sessionRepository);
 
 const handler = createApiHandler();
 const server = createServer((request, response) => {

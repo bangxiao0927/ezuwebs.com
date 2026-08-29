@@ -13,7 +13,7 @@ test("recoverInterruptedActions leaves completed and cancelled actions untouched
   assert.deepEqual(events, []);
 });
 
-test("recoverInterruptedActions marks a pending or running action as failed and records an execution.error event", () => {
+test("recoverInterruptedActions marks a running action as failed and records an execution.error event", () => {
   const running = { ...createTimelineAction({ source: "coder", action: { type: "command.run", command: "pnpm build" } }), status: "running" as const };
 
   const events = recoverInterruptedActions([running]);
@@ -31,4 +31,13 @@ test("recoverInterruptedActions marks a pending or running action as failed and 
     assert.equal(errorEvent.actionId, running.id);
     assert.equal(errorEvent.recoverable, true);
   }
+});
+
+test("recoverInterruptedActions leaves approval-pending actions untouched", () => {
+  const pending = createTimelineAction({
+    source: "coder",
+    action: { type: "file.patch", path: "a.html", patch: "change" },
+  });
+
+  assert.deepEqual(recoverInterruptedActions([pending]), []);
 });

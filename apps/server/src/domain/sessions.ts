@@ -8,7 +8,11 @@ import {
 } from "./demo.js";
 import { buildChoiceResolutionEvent, buildInputResolutionEvent } from "./interaction.js";
 import { createReplacementPrompt } from "./replacement.js";
-import { createMemorySessionRepository, type SessionRecord } from "./session-repository.js";
+import {
+  createMemorySessionRepository,
+  type SessionRecord,
+  type SessionRepository,
+} from "./session-repository.js";
 import {
   createInteractiveWebEditorState,
   createInteractiveWebEditResponse,
@@ -50,7 +54,11 @@ export class InteractionConflictError extends Error {}
 export class ActionRetryConflictError extends Error {}
 export { InteractionValidationError } from "./interaction.js";
 
-const sessionRepository = createMemorySessionRepository();
+let sessionRepository = createMemorySessionRepository();
+
+export function configureSessionRepository(repository: SessionRepository): void {
+  sessionRepository = repository;
+}
 
 export async function recoverSessionsOnStartup(): Promise<void> {
   await sessionRepository.recoverInterruptedSessions();

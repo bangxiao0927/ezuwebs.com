@@ -1,9 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import { type AgentEvent } from "@ezu/protocol";
 
-import { createMemorySessionRepository, type SessionRecord } from "./session-repository.js";
+import {
+  createFileSessionRepository,
+  createMemorySessionRepository,
+  type SessionRecord,
+} from "./session-repository.js";
 
 function makeRecord(id: string, events: AgentEvent[]): SessionRecord {
   return {
@@ -56,4 +63,18 @@ test("recoverInterruptedSessions appends failure events for actions left in prog
   assert.equal(recovered?.events[0]?.type, "action.created");
   const lastEvent = recovered?.events.at(-1);
   assert.equal(lastEvent?.type, "execution.error");
+});
+
+test("createFileSessionRepository restores sessions across repository instances", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "ezu-sessions-"));
+  const file = path.join(directory, "sessions.json");
+  try {
+    const first = await createFileSessionRepository(file);
+    await first.create(makeRecord("durable-session", []));
+
+    const restarted = await createFileSessionRepository(file);
+    assert.equal((await restarted.get("durable-session"))?.id, "durable-session");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
