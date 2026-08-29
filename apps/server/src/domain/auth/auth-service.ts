@@ -61,6 +61,7 @@ export class AuthService {
   private readonly fetchJwks: FetchJwks;
   private readonly now: () => Date;
   private readonly randomToken: (byteLength?: number) => string;
+  private readonly secureCookies: boolean;
 
   constructor(config: AuthServiceConfig, deps: AuthServiceDeps) {
     this.config = config;
@@ -69,6 +70,7 @@ export class AuthService {
     this.fetchJwks = deps.fetchJwks;
     this.now = deps.now ?? (() => new Date());
     this.randomToken = deps.randomToken ?? generateRandomToken;
+    this.secureCookies = new URL(config.google.redirectUri).protocol === "https:";
   }
 
   beginGoogleLogin(): BeginGoogleLoginResult {
@@ -82,6 +84,7 @@ export class AuthService {
       redirectUrl: authorizationRequest.url,
       transactionCookie: serializeCookie(TRANSACTION_COOKIE_NAME, JSON.stringify(transaction), {
         maxAgeSeconds: TRANSACTION_TTL_SECONDS,
+        secure: this.secureCookies,
       }),
     };
   }
@@ -135,8 +138,12 @@ export class AuthService {
       user,
       sessionCookie: serializeCookie(SESSION_COOKIE_NAME, sessionToken, {
         maxAgeSeconds: Math.floor(SESSION_TTL_MS / 1000),
+        secure: this.secureCookies,
       }),
-      clearTransactionCookie: serializeCookie(TRANSACTION_COOKIE_NAME, "", { expires: new Date(0) }),
+      clearTransactionCookie: serializeCookie(TRANSACTION_COOKIE_NAME, "", {
+        expires: new Date(0),
+        secure: this.secureCookies,
+      }),
     };
   }
 
@@ -151,6 +158,11 @@ export class AuthService {
     if (sessionCookieValue) {
       await this.store.revokeAuthSession(hashSessionToken(sessionCookieValue));
     }
-    return { clearCookie: serializeCookie(SESSION_COOKIE_NAME, "", { expires: new Date(0) }) };
+    return {
+      clearCookie: serializeCookie(SESSION_COOKIE_NAME, "", {
+        expires: new Date(0),
+        secure: this.secureCookies,
+      }),
+    };
   }
 }

@@ -13,7 +13,12 @@ export function parseCookies(header: string | undefined): Record<string, string>
     if (!name) {
       continue;
     }
-    cookies[name] = decodeURIComponent(value);
+    try {
+      cookies[name] = decodeURIComponent(value);
+    } catch {
+      // An unrelated non-percent-encoded cookie must not break auth routes.
+      cookies[name] = value;
+    }
   }
   return cookies;
 }
@@ -30,7 +35,7 @@ export function serializeCookie(name: string, value: string, options: CookieOpti
   segments.push(`Path=${options.path ?? "/"}`);
   segments.push("HttpOnly");
   segments.push("SameSite=Lax");
-  if (options.secure ?? process.env.NODE_ENV === "production") {
+  if (options.secure ?? process.env.AUTH_COOKIE_SECURE !== "false") {
     segments.push("Secure");
   }
   if (typeof options.maxAgeSeconds === "number") {

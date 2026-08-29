@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { AuthUser } from "../domain/auth/store.js";
-import { parseCookies } from "./cookies.js";
+import { parseCookies, serializeCookie } from "./cookies.js";
 
 export interface AuthServicePort {
   sessionCookieName: string;
@@ -61,7 +61,12 @@ export async function handleAuthRoute(
       sendRedirect(response, webAppUrl(), [result.sessionCookie, result.clearTransactionCookie]);
     } catch {
       // Never leak provider or verification error details into the redirect the browser follows.
-      sendRedirect(response, withErrorFlag(webAppUrl()));
+      sendRedirect(response, withErrorFlag(webAppUrl()), [
+        serializeCookie(authService.transactionCookieName, "", {
+          expires: new Date(0),
+          secure: new URL(webAppUrl(), "http://localhost").protocol === "https:",
+        }),
+      ]);
     }
     return true;
   }

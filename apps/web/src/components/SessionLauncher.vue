@@ -35,8 +35,13 @@ function signInWithGoogle(): void {
 }
 
 async function signOut(): Promise<void> {
-  await logout();
-  user.value = null;
+  error.value = undefined;
+  try {
+    await logout();
+    user.value = null;
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Failed to sign out";
+  }
 }
 
 async function open(session: SessionSummary): Promise<void> {

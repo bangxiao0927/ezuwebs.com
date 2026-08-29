@@ -14,6 +14,13 @@ test("parseCookies returns an empty object for a missing header", () => {
   assert.deepEqual(parseCookies(undefined), {});
 });
 
+test("parseCookies preserves malformed percent escapes instead of breaking auth", () => {
+  assert.deepEqual(parseCookies("unrelated=100%; ezu_session=token"), {
+    unrelated: "100%",
+    ezu_session: "token",
+  });
+});
+
 test("serializeCookie emits HttpOnly, SameSite=Lax, and the requested max age", () => {
   const header = serializeCookie("ezu_session", "tok en", { maxAgeSeconds: 3600 });
 
