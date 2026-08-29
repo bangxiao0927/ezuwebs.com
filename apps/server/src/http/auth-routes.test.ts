@@ -16,12 +16,14 @@ function createFakeAuthService(overrides: Partial<AuthServicePort> = {}): AuthSe
       transactionCookie: "ezu_oauth_txn=fake-txn; Path=/; HttpOnly; SameSite=Lax",
     }),
     completeGoogleLogin: async () => ({
-      user: { id: "user-1", email: "ada@example.com" } satisfies AuthUser,
+      user: { id: "user-1", email: "ada@example.com", plan: "free" } satisfies AuthUser,
       sessionCookie: "ezu_session=fake-session; Path=/; HttpOnly; SameSite=Lax",
       clearTransactionCookie: "ezu_oauth_txn=; Path=/; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
     }),
     getCurrentUser: async (sessionCookieValue) =>
-      sessionCookieValue === "fake-session" ? ({ id: "user-1", email: "ada@example.com" } satisfies AuthUser) : undefined,
+      sessionCookieValue === "fake-session"
+        ? ({ id: "user-1", email: "ada@example.com", plan: "free" } satisfies AuthUser)
+        : undefined,
     logout: async () => ({
       clearCookie: "ezu_session=; Path=/; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
     }),

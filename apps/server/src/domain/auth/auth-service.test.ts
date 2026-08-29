@@ -41,6 +41,7 @@ function createFakeStore(): AuthStore & { users: AuthUser[]; sessions: Map<strin
       const created: AuthUser = {
         id: `user-${users.length + 1}`,
         email: identity.email,
+        plan: "free",
         ...(identity.name ? { name: identity.name } : {}),
       };
       users.push(created);
@@ -176,7 +177,7 @@ test("getCurrentUser resolves the user for an active session cookie and undefine
     tokenHash: hashSessionToken(sessionToken),
     expiresAt: new Date(Date.now() + 60_000),
   });
-  store.users.push({ id: "user-1", email: "known@example.com" });
+  store.users.push({ id: "user-1", email: "known@example.com", plan: "free" });
 
   assert.equal((await service.getCurrentUser(sessionToken))?.email, "known@example.com");
   assert.equal(await service.getCurrentUser("unknown-token"), undefined);

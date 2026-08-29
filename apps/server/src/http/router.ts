@@ -2,6 +2,7 @@ import { type IncomingMessage, type ServerResponse } from "node:http";
 
 import type { AuthServicePort } from "./auth-routes.js";
 import { handleAuthRoute } from "./auth-routes.js";
+import { parseCookies } from "./cookies.js";
 import {
   applyEdit,
   createSession,
@@ -19,6 +20,7 @@ import {
   selectBlock,
   sendPrompt,
 } from "../domain/sessions.js";
+import { getDashboard } from "../domain/dashboard.js";
 
 type Handler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
@@ -64,6 +66,26 @@ async function resolveDefaultAuthService(): Promise<AuthServicePort> {
   return cachedDefaultAuthService;
 }
 
+/**
+ * Resolves the id of the signed-in user from the session cookie, if any.
+ * Any failure to resolve an auth service (e.g. Google credentials not
+ * configured) is treated as "anonymous" so demo session routes keep working
+ * without auth configured.
+ */
+async function resolveCurrentUserId(
+  request: IncomingMessage,
+  options: CreateApiHandlerOptions,
+): Promise<string | undefined> {
+  try {
+    const authService = options.authService ?? (await resolveDefaultAuthService());
+    const sessionCookieValue = parseCookies(request.headers.cookie)[authService.sessionCookieName];
+    const user = await authService.getCurrentUser(sessionCookieValue);
+    return user?.id;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler {
   return async (request, response) => {
     try {
@@ -96,6 +118,19 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
         }
       }
 
+      // GET /api/dashboard
+      if (segments.length === 2 && segments[1] === "dashboard" && method === "GET") {
+        const authService = options.authService ?? (await resolveDefaultAuthService());
+        const sessionCookieValue = parseCookies(request.headers.cookie)[authService.sessionCookieName];
+        const user = await authService.getCurrentUser(sessionCookieValue);
+        if (!user) {
+          sendJson(response, 401, { error: "Authentication required" } satisfies JsonError);
+          return;
+        }
+        sendJson(response, 200, await getDashboard(user));
+        return;
+      }
+
       // GET /api/sessions
       if (segments.length === 2 && segments[1] === "sessions" && method === "GET") {
         sendJson(response, 200, { sessions: listSessionDefinitions() });
@@ -105,7 +140,8 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
       // POST /api/sessions { definitionId }
       if (segments.length === 2 && segments[1] === "sessions" && method === "POST") {
         const body = await readJsonBody<{ definitionId?: string }>(request);
-        const session = await createSession(body.definitionId ?? "club-promo");
+        const currentUserId = await resolveCurrentUserId(request, options);
+        const session = await createSession(body.definitionId ?? "club-promo", currentUserId);
         sendJson(response, 201, { session });
         return;
       }
@@ -114,20 +150,21 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
       if (segments.length >= 3 && segments[1] === "sessions") {
         const sessionId = decodeURIComponent(segments[2]!);
         const action = segments[3];
+        const currentUserId = await resolveCurrentUserId(request, options);
 
         if (!action && method === "GET") {
-          sendJson(response, 200, { session: await getSession(sessionId) });
+          sendJson(response, 200, { session: await getSession(sessionId, currentUserId) });
           return;
         }
 
         if (action === "files" && method === "GET") {
-          sendJson(response, 200, { files: await getSessionWorkspaceFiles(sessionId) });
+          sendJson(response, 200, { files: await getSessionWorkspaceFiles(sessionId, currentUserId) });
           return;
         }
 
         if (action === "select-block" && method === "POST") {
           const body = await readJsonBody<{ blockId?: string }>(request);
-          const session = await selectBlock(sessionId, body.blockId ?? "workbench");
+          const session = await selectBlock(sessionId, body.blockId ?? "workbench", currentUserId);
           sendJson(response, 200, { session });
           return;
         }
@@ -139,12 +176,16 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
             properties?: Array<{ key: string; label: string; value: string }>;
             runAgent?: boolean;
           }>(request);
-          const session = await applyEdit(sessionId, {
-            intent: body.intent ?? "",
-            patchStrategy: body.patchStrategy ?? "refine",
-            ...(body.properties ? { properties: body.properties } : {}),
-            ...(typeof body.runAgent === "boolean" ? { runAgent: body.runAgent } : {}),
-          });
+          const session = await applyEdit(
+            sessionId,
+            {
+              intent: body.intent ?? "",
+              patchStrategy: body.patchStrategy ?? "refine",
+              ...(body.properties ? { properties: body.properties } : {}),
+              ...(typeof body.runAgent === "boolean" ? { runAgent: body.runAgent } : {}),
+            },
+            currentUserId,
+          );
           sendJson(response, 200, { session });
           return;
         }
@@ -156,7 +197,7 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
             sendJson(response, 400, { error: "Prompt text is required" } satisfies JsonError);
             return;
           }
-          sendJson(response, 200, { session: await sendPrompt(sessionId, text) });
+          sendJson(response, 200, { session: await sendPrompt(sessionId, text, currentUserId) });
           return;
         }
 
@@ -176,6 +217,7 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
             body.interactionId,
             decision,
             body.reason ?? "Replacement requested.",
+            currentUserId,
           );
           sendJson(response, 200, { session });
           return;
@@ -192,12 +234,22 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
             return;
           }
           if (typeof body.optionId === "string") {
-            const session = await resolveChoiceInteraction(sessionId, body.interactionId, body.optionId);
+            const session = await resolveChoiceInteraction(
+              sessionId,
+              body.interactionId,
+              body.optionId,
+              currentUserId,
+            );
             sendJson(response, 200, { session });
             return;
           }
           if (typeof body.value === "string") {
-            const session = await resolveInputInteraction(sessionId, body.interactionId, body.value);
+            const session = await resolveInputInteraction(
+              sessionId,
+              body.interactionId,
+              body.value,
+              currentUserId,
+            );
             sendJson(response, 200, { session });
             return;
           }
@@ -207,7 +259,7 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
 
         if (action === "actions" && segments[5] === "retry" && method === "POST") {
           const actionId = decodeURIComponent(segments[4]!);
-          sendJson(response, 200, { session: await retryAction(sessionId, actionId) });
+          sendJson(response, 200, { session: await retryAction(sessionId, actionId, currentUserId) });
           return;
         }
       }
