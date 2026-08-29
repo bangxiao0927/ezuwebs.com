@@ -9,5 +9,8 @@
   "include": [
     "src",
     "src/vite-env.d.ts"
+  ],
+  "exclude": [
+    "src/**/*.test.ts"
   ]
 }

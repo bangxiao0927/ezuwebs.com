@@ -693,6 +693,40 @@ textarea {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
 }
 
+.utilities-actions,
+.scratch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.utilities-status {
+  margin: 0;
+  min-height: 1.2em;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.scratch-disclaimer {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.scratch-canvas-wrap {
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  overflow: hidden;
+}
+
+.scratch-canvas {
+  display: block;
+  width: 100%;
+  touch-action: none;
+}
+
 @media (max-width: 960px) {
   .layout {
     grid-template-columns: 1fr;

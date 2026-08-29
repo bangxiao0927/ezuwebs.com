@@ -12,7 +12,7 @@
     "start": "pnpm --filter @ezu/server start",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @ezu/protocol test && pnpm --filter @ezu/core test && pnpm --filter @ezu/agent test && pnpm --filter @ezu/model-gateway test && pnpm --filter @ezu/runtime-browser test && pnpm --filter @ezu/server test",
+    "test": "pnpm --filter @ezu/protocol test && pnpm --filter @ezu/core test && pnpm --filter @ezu/agent test && pnpm --filter @ezu/model-gateway test && pnpm --filter @ezu/runtime-browser test && pnpm --filter @ezu/server test && pnpm --filter @ezu/web test",
     "db:generate": "pnpm --filter @ezu/db db:generate",
     "db:migrate": "pnpm --filter @ezu/db db:migrate"
   },
