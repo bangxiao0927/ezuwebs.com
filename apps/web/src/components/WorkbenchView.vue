@@ -34,6 +34,21 @@ const answerValue = ref("");
 const viewMode = ref<"preview" | "code" | "diff">("preview");
 const activeFile = ref<string | undefined>();
 
+const pendingEditRequestId = ref<string | undefined>();
+const pendingPromptRequestId = ref<string | undefined>();
+
+/**
+ * Reuses the same requestId across retries of the same user action so a
+ * network retry cannot cause the backend to charge or run the agent twice.
+ * Cleared by the caller once the action succeeds.
+ */
+function requestIdFor(pending: { value: string | undefined }): string {
+  if (!pending.value) {
+    pending.value = crypto.randomUUID();
+  }
+  return pending.value;
+}
+
 const viewModel = computed(() => session.value?.viewModel ?? null);
 
 function syncFromSession(next: Session): void {
@@ -107,15 +122,18 @@ async function handleSubmitEdit(): Promise<void> {
     ...property,
     value: propertyValues[property.key] ?? property.value,
   }));
+  const requestId = requestIdFor(pendingEditRequestId);
   const next = await run(() =>
     applyEdit(session.value!.id, {
       intent: intent.value.trim() || session.value!.viewModel.webEditor.lastIntent || "Refine the selected block.",
       patchStrategy: patchStrategy.value,
       properties,
       runAgent: true,
+      requestId,
     }),
   );
   if (next) {
+    pendingEditRequestId.value = undefined;
     syncFromSession(next);
     flashToast("Generated a new block-scoped patch.");
   }
@@ -127,8 +145,10 @@ async function handlePrompt(): Promise<void> {
     flashToast("Type a request before sending.");
     return;
   }
-  const next = await run(() => sendPrompt(session.value!.id, text));
+  const requestId = requestIdFor(pendingPromptRequestId);
+  const next = await run(() => sendPrompt(session.value!.id, text, requestId));
   if (next) {
+    pendingPromptRequestId.value = undefined;
     syncFromSession(next);
     composer.value = "";
     flashToast("Prompt routed into the active session.");

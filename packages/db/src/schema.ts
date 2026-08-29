@@ -74,6 +74,7 @@ export const usageEvents = sqliteTable(
     credits: integer("credits").notNull(),
     model: text("model"),
     sessionId: text("session_id"),
+    status: text("status", { enum: ["succeeded", "refunded"] }).notNull().default("succeeded"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (table) => [index("usage_events_user_id_idx").on(table.userId)],

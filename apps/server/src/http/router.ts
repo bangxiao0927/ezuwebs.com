@@ -5,6 +5,7 @@ import { handleAuthRoute } from "./auth-routes.js";
 import { handleBillingRoute } from "./billing-routes.js";
 import { readJsonBody } from "./body.js";
 import { parseCookies } from "./cookies.js";
+import { isBillingEnabled } from "../domain/billing/billing-service.js";
 import {
   applyEdit,
   createSession,
@@ -19,6 +20,7 @@ import {
   InsufficientCreditsError,
   InteractionConflictError,
   InteractionValidationError,
+  MissingIdempotencyKeyError,
   SessionNotFoundError,
   selectBlock,
   sendPrompt,
@@ -75,6 +77,37 @@ async function resolveCurrentUserId(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Resolves the signed-in user for a billed action (edit/prompt). Unlike
+ * `resolveCurrentUserId`, auth resolution failures are never swallowed into
+ * "anonymous": when billing is enabled, a broken auth service must surface as
+ * an error, not silently bypass the credit charge.
+ */
+async function resolveCurrentUserIdForBilledAction(
+  request: IncomingMessage,
+  options: CreateApiHandlerOptions,
+): Promise<string | undefined> {
+  if (!isBillingEnabled()) {
+    return resolveCurrentUserId(request, options);
+  }
+  const authService = options.authService ?? (await resolveDefaultAuthService());
+  const sessionCookieValue = parseCookies(request.headers.cookie)[authService.sessionCookieName];
+  const user = await authService.getCurrentUser(sessionCookieValue);
+  return user?.id;
+}
+
+function resolveRequestId(request: IncomingMessage, body: { requestId?: string }): string | undefined {
+  const header = request.headers["idempotency-key"];
+  const headerValue = Array.isArray(header) ? header[0] : header;
+  if (typeof headerValue === "string" && headerValue.trim()) {
+    return headerValue.trim();
+  }
+  if (typeof body.requestId === "string" && body.requestId.trim()) {
+    return body.requestId.trim();
+  }
+  return undefined;
 }
 
 export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler {
@@ -174,7 +207,23 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
             patchStrategy?: "replace" | "append" | "refine";
             properties?: Array<{ key: string; label: string; value: string }>;
             runAgent?: boolean;
+            requestId?: string;
           }>(request);
+          const willCharge = body.runAgent !== false;
+          const billedCurrentUserId = willCharge
+            ? await resolveCurrentUserIdForBilledAction(request, options)
+            : currentUserId;
+          if (willCharge && isBillingEnabled() && !billedCurrentUserId) {
+            sendJson(response, 401, { error: "Authentication required" } satisfies JsonError);
+            return;
+          }
+          const requestId = resolveRequestId(request, body);
+          if (willCharge && isBillingEnabled() && billedCurrentUserId && !requestId) {
+            sendJson(response, 400, {
+              error: "An Idempotency-Key header or requestId is required",
+            } satisfies JsonError);
+            return;
+          }
           const session = await applyEdit(
             sessionId,
             {
@@ -182,21 +231,34 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
               patchStrategy: body.patchStrategy ?? "refine",
               ...(body.properties ? { properties: body.properties } : {}),
               ...(typeof body.runAgent === "boolean" ? { runAgent: body.runAgent } : {}),
+              ...(requestId ? { requestId } : {}),
             },
-            currentUserId,
+            billedCurrentUserId,
           );
           sendJson(response, 200, { session });
           return;
         }
 
         if (action === "prompt" && method === "POST") {
-          const body = await readJsonBody<{ text?: string }>(request);
+          const body = await readJsonBody<{ text?: string; requestId?: string }>(request);
           const text = (body.text ?? "").trim();
           if (!text) {
             sendJson(response, 400, { error: "Prompt text is required" } satisfies JsonError);
             return;
           }
-          sendJson(response, 200, { session: await sendPrompt(sessionId, text, currentUserId) });
+          const billedCurrentUserId = await resolveCurrentUserIdForBilledAction(request, options);
+          if (isBillingEnabled() && !billedCurrentUserId) {
+            sendJson(response, 401, { error: "Authentication required" } satisfies JsonError);
+            return;
+          }
+          const requestId = resolveRequestId(request, body);
+          if (isBillingEnabled() && billedCurrentUserId && !requestId) {
+            sendJson(response, 400, {
+              error: "An Idempotency-Key header or requestId is required",
+            } satisfies JsonError);
+            return;
+          }
+          sendJson(response, 200, { session: await sendPrompt(sessionId, text, billedCurrentUserId, requestId) });
           return;
         }
 
@@ -276,6 +338,8 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
               ? 409
             : error instanceof InsufficientCreditsError
               ? 402
+            : error instanceof MissingIdempotencyKeyError
+              ? 400
             : 500;
       sendJson(response, status, {
         error: error instanceof Error ? error.message : "Internal server error",

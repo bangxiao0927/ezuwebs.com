@@ -16,8 +16,8 @@ const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "same-origin",
-    headers: { "content-type": "application/json" },
     ...init,
+    headers: { "content-type": "application/json", ...(init?.headers as Record<string, string> | undefined) },
   });
 
   if (!response.ok) {
@@ -96,23 +96,27 @@ export async function applyEdit(
     patchStrategy: PatchStrategy;
     properties?: WebEditorProperty[];
     runAgent?: boolean;
+    requestId: string;
   },
 ): Promise<Session> {
+  const { requestId, ...body } = input;
   const data = await request<{ session: Session }>(
     `/sessions/${encodeURIComponent(sessionId)}/edit`,
     {
       method: "POST",
-      body: JSON.stringify(input),
+      headers: { "idempotency-key": requestId },
+      body: JSON.stringify(body),
     },
   );
   return data.session;
 }
 
-export async function sendPrompt(sessionId: string, text: string): Promise<Session> {
+export async function sendPrompt(sessionId: string, text: string, requestId: string): Promise<Session> {
   const data = await request<{ session: Session }>(
     `/sessions/${encodeURIComponent(sessionId)}/prompt`,
     {
       method: "POST",
+      headers: { "idempotency-key": requestId },
       body: JSON.stringify({ text }),
     },
   );

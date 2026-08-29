@@ -53,8 +53,31 @@ export function appendLedgerEntry(db: EzuDb, input: AppendLedgerEntryInput): App
         idempotencyKey: input.idempotencyKey,
         createdAt: new Date(),
       })
-      .run();
+    .run();
     return { applied: true, balance: ledgerBalance(tx, input.userId) };
+  });
+}
+
+export interface RefundLedgerEntryInput {
+  userId: string;
+  /** Positive amount to credit back. */
+  amount: number;
+  reason: string;
+  /** The idempotencyKey of the debit being refunded; the refund's own key is derived from it. */
+  debitIdempotencyKey: string;
+}
+
+/**
+ * Refunds a prior debit. The refund's idempotencyKey is derived from
+ * `debitIdempotencyKey`, so replaying a refund for the same debit is a no-op.
+ */
+export function refundLedgerEntry(db: EzuDb, input: RefundLedgerEntryInput): AppendLedgerEntryResult {
+  return appendLedgerEntry(db, {
+    userId: input.userId,
+    type: "refund",
+    amount: input.amount,
+    reason: input.reason,
+    idempotencyKey: `refund:${input.debitIdempotencyKey}`,
   });
 }
 
@@ -111,27 +134,37 @@ export function debitLedgerIfSufficient(
 }
 
 export interface InsertUsageEventInput {
+  id: string;
   userId: string;
   kind: string;
   units: number;
   credits: number;
   model?: string;
   sessionId?: string;
+  status?: "succeeded" | "refunded";
 }
 
+/** Inserts a usage event. Replaying the same `id` is a no-op. */
 export function insertUsageEvent(db: EzuDb, input: InsertUsageEventInput): void {
   db.insert(usageEvents)
     .values({
-      id: crypto.randomUUID(),
+      id: input.id,
       userId: input.userId,
       kind: input.kind,
       units: input.units,
       credits: input.credits,
       model: input.model ?? null,
       sessionId: input.sessionId ?? null,
+      status: input.status ?? "succeeded",
       createdAt: new Date(),
     })
+    .onConflictDoNothing()
     .run();
+}
+
+/** Marks a usage event as refunded. Idempotent: replaying it is a no-op. */
+export function markUsageEventRefunded(db: EzuDb, id: string): void {
+  db.update(usageEvents).set({ status: "refunded" }).where(eq(usageEvents.id, id)).run();
 }
 
 export interface ListUsageEventsResult {
@@ -157,7 +190,7 @@ export function listUsageEvents(
   const aggregate = db
     .select({
       total: sql<number>`count(*)`,
-      totalCreditsConsumed: sql<number>`coalesce(sum(${usageEvents.credits}), 0)`,
+      totalCreditsConsumed: sql<number>`coalesce(sum(case when ${usageEvents.status} = 'succeeded' then ${usageEvents.credits} else 0 end), 0)`,
     })
     .from(usageEvents)
     .where(eq(usageEvents.userId, userId))

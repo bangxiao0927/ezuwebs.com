@@ -6,6 +6,7 @@ import {
   DevGrantsDisabledError,
   FREE_GRANT_CREDITS,
   InsufficientCreditsError,
+  MissingIdempotencyKeyError,
   UnknownDevGrantPackageError,
   USAGE_COSTS,
   chargeUsage,
@@ -13,6 +14,7 @@ import {
   getBillingSummary,
   grantDevCredits,
   listBillingUsage,
+  refundUsageCharge,
 } from "./billing-service.js";
 
 function resetBilling(): void {
@@ -33,7 +35,7 @@ test("getBillingSummary grants the initial free credits exactly once", async () 
 test("balances are isolated between users", async () => {
   resetBilling();
 
-  await chargeUsage("user-a", { kind: "prompt" });
+  await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
   const summaryA = await getBillingSummary("user-a");
   const summaryB = await getBillingSummary("user-b");
 
@@ -46,25 +48,79 @@ test("chargeUsage rejects a charge once the balance is insufficient, leaving the
   await getBillingSummary("user-a");
   const chargesUntilDrained = Math.floor(FREE_GRANT_CREDITS / USAGE_COSTS["prompt"]!);
   for (let i = 0; i < chargesUntilDrained; i += 1) {
-    await chargeUsage("user-a", { kind: "prompt" });
+    await chargeUsage({ userId: "user-a", kind: "prompt", requestId: `req-${i}` });
   }
   const balanceBefore = await getBillingSummary("user-a");
 
-  await assert.rejects(chargeUsage("user-a", { kind: "prompt" }), InsufficientCreditsError);
+  await assert.rejects(
+    chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-final" }),
+    InsufficientCreditsError,
+  );
 
   const balanceAfter = await getBillingSummary("user-a");
   assert.equal(balanceAfter.balance, balanceBefore.balance);
 });
 
+test("chargeUsage requires a requestId", async () => {
+  resetBilling();
+  await assert.rejects(
+    chargeUsage({ userId: "user-a", kind: "prompt", requestId: "" }),
+    MissingIdempotencyKeyError,
+  );
+});
+
+test("chargeUsage is idempotent: replaying the same requestId does not debit twice", async () => {
+  resetBilling();
+
+  const first = await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+  const replay = await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+
+  assert.equal(first.applied, true);
+  assert.equal(replay.applied, false);
+  assert.equal(replay.usageEventId, first.usageEventId);
+
+  const summary = await getBillingSummary("user-a");
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - USAGE_COSTS["prompt"]!);
+
+  const page = await listBillingUsage("user-a");
+  assert.equal(page.events.length, 1);
+});
+
+test("refundUsageCharge credits back a charged debit and marks the usage event refunded", async () => {
+  resetBilling();
+  await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+
+  await refundUsageCharge({ userId: "user-a", kind: "prompt", requestId: "req-1", reason: "agent failed" });
+
+  const summary = await getBillingSummary("user-a");
+  assert.equal(summary.balance, FREE_GRANT_CREDITS);
+
+  const page = await listBillingUsage("user-a");
+  assert.equal(page.events[0]?.status, "refunded");
+  assert.equal(page.totalCreditsConsumed, 0);
+});
+
+test("refundUsageCharge is idempotent: replaying it does not refund twice", async () => {
+  resetBilling();
+  await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+
+  await refundUsageCharge({ userId: "user-a", kind: "prompt", requestId: "req-1", reason: "agent failed" });
+  await refundUsageCharge({ userId: "user-a", kind: "prompt", requestId: "req-1", reason: "agent failed" });
+
+  const summary = await getBillingSummary("user-a");
+  assert.equal(summary.balance, FREE_GRANT_CREDITS);
+});
+
 test("chargeUsage records a usage event that shows up in listBillingUsage", async () => {
   resetBilling();
-  await chargeUsage("user-a", { kind: "prompt", sessionId: "session-1" });
+  await chargeUsage({ userId: "user-a", kind: "prompt", sessionId: "session-1", requestId: "req-1" });
 
   const page = await listBillingUsage("user-a");
 
   assert.equal(page.events.length, 1);
   assert.equal(page.events[0]?.kind, "prompt");
   assert.equal(page.events[0]?.sessionId, "session-1");
+  assert.equal(page.events[0]?.status, "succeeded");
   assert.equal(page.total, 1);
   assert.equal(page.totalCreditsConsumed, USAGE_COSTS["prompt"]);
 });
@@ -72,7 +128,7 @@ test("chargeUsage records a usage event that shows up in listBillingUsage", asyn
 test("listBillingUsage clamps limit and offset to safe bounds", async () => {
   resetBilling();
   for (let i = 0; i < 5; i += 1) {
-    await chargeUsage("user-a", { kind: "prompt" });
+    await chargeUsage({ userId: "user-a", kind: "prompt", requestId: `req-${i}` });
   }
 
   const page = await listBillingUsage("user-a", { limit: 2, offset: 1 });

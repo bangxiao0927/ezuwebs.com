@@ -5,6 +5,8 @@ import type {
   DebitInput,
   DebitResult,
   ListUsageEventsResult,
+  RefundDebitInput,
+  RefundDebitResult,
   UsageEventInput,
 } from "./store.js";
 
@@ -22,6 +24,7 @@ interface UsageRow {
   credits: number;
   model?: string;
   sessionId?: string;
+  status: "succeeded" | "refunded";
   createdAt: string;
 }
 
@@ -59,21 +62,42 @@ export function createMemoryBillingStore(): BillingStore {
       return { applied: true, sufficient: true, balance: balance - input.credits };
     },
 
+    async refundDebit(input: RefundDebitInput): Promise<RefundDebitResult> {
+      const idempotencyKey = `refund:${input.debitIdempotencyKey}`;
+      if (idempotencyKeys.has(idempotencyKey)) {
+        return { applied: false, balance: balanceFor(input.userId) };
+      }
+      idempotencyKeys.add(idempotencyKey);
+      ledger.push({ userId: input.userId, amount: input.credits, idempotencyKey });
+      return { applied: true, balance: balanceFor(input.userId) };
+    },
+
     async getBalance(userId: string): Promise<number> {
       return balanceFor(userId);
     },
 
     async insertUsageEvent(input: UsageEventInput): Promise<void> {
+      if (usage.some((row) => row.id === input.id)) {
+        return;
+      }
       usage.push({
-        id: crypto.randomUUID(),
+        id: input.id,
         userId: input.userId,
         kind: input.kind,
         units: input.units,
         credits: input.credits,
         ...(input.model ? { model: input.model } : {}),
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        status: input.status ?? "succeeded",
         createdAt: new Date().toISOString(),
       });
+    },
+
+    async markUsageEventRefunded(usageEventId: string): Promise<void> {
+      const row = usage.find((candidate) => candidate.id === usageEventId);
+      if (row) {
+        row.status = "refunded";
+      }
     },
 
     async listUsageEvents(
@@ -82,7 +106,9 @@ export function createMemoryBillingStore(): BillingStore {
     ): Promise<ListUsageEventsResult> {
       const owned = usage.filter((row) => row.userId === userId).slice().reverse();
       const total = owned.length;
-      const totalCreditsConsumed = owned.reduce((sum, row) => sum + row.credits, 0);
+      const totalCreditsConsumed = owned
+        .filter((row) => row.status === "succeeded")
+        .reduce((sum, row) => sum + row.credits, 0);
       const page = owned.slice(options.offset, options.offset + options.limit).map((row) => {
         const { userId: _userId, ...dto } = row;
         return dto;

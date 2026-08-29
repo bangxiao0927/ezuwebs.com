@@ -57,9 +57,32 @@ test("sqlite-backed billing store enforces idempotent grants and sufficient-bala
   assert.equal(debited.applied, true);
   assert.equal(debited.balance, 70);
 
-  await store.insertUsageEvent({ userId: user.id, kind: "prompt", units: 1, credits: 30 });
+  await store.insertUsageEvent({ id: "usage-event:1", userId: user.id, kind: "prompt", units: 1, credits: 30 });
   const page = await store.listUsageEvents(user.id, { limit: 10, offset: 0 });
   assert.equal(page.total, 1);
   assert.equal(page.totalCreditsConsumed, 30);
   assert.equal(page.events[0]?.kind, "prompt");
+  assert.equal(page.events[0]?.status, "succeeded");
+
+  const firstRefund = await store.refundDebit({
+    userId: user.id,
+    credits: 30,
+    reason: "refund: prompt failed",
+    debitIdempotencyKey: "usage:2",
+  });
+  const replayedRefund = await store.refundDebit({
+    userId: user.id,
+    credits: 30,
+    reason: "refund: prompt failed",
+    debitIdempotencyKey: "usage:2",
+  });
+  assert.equal(firstRefund.applied, true);
+  assert.equal(firstRefund.balance, 100);
+  assert.equal(replayedRefund.applied, false);
+  assert.equal(await store.getBalance(user.id), 100);
+
+  await store.markUsageEventRefunded("usage-event:1");
+  const afterRefund = await store.listUsageEvents(user.id, { limit: 10, offset: 0 });
+  assert.equal(afterRefund.events[0]?.status, "refunded");
+  assert.equal(afterRefund.totalCreditsConsumed, 0);
 });

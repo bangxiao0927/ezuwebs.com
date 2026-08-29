@@ -7,6 +7,8 @@ import type {
   DebitInput,
   DebitResult,
   ListUsageEventsResult,
+  RefundDebitInput,
+  RefundDebitResult,
   UsageEventDto,
   UsageEventInput,
 } from "./store.js";
@@ -19,6 +21,7 @@ function toUsageEventDto(event: UsageEvent): UsageEventDto {
     credits: event.credits,
     ...(event.model ? { model: event.model } : {}),
     ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+    status: event.status,
     createdAt: event.createdAt.toISOString(),
   };
 }
@@ -56,6 +59,16 @@ export function createSqliteBillingStore(options: OpenDatabaseOptions = {}): Bil
       return debitLedgerIfSufficient(db, input);
     },
 
+    async refundDebit(input: RefundDebitInput): Promise<RefundDebitResult> {
+      const [db, { refundLedgerEntry }] = await Promise.all([getDb(), import("@ezu/db")]);
+      return refundLedgerEntry(db, {
+        userId: input.userId,
+        amount: input.credits,
+        reason: input.reason,
+        debitIdempotencyKey: input.debitIdempotencyKey,
+      });
+    },
+
     async getBalance(userId: string): Promise<number> {
       const [db, { getLedgerBalance }] = await Promise.all([getDb(), import("@ezu/db")]);
       return getLedgerBalance(db, userId);
@@ -64,6 +77,11 @@ export function createSqliteBillingStore(options: OpenDatabaseOptions = {}): Bil
     async insertUsageEvent(input: UsageEventInput): Promise<void> {
       const [db, { insertUsageEvent }] = await Promise.all([getDb(), import("@ezu/db")]);
       insertUsageEvent(db, input);
+    },
+
+    async markUsageEventRefunded(usageEventId: string): Promise<void> {
+      const [db, { markUsageEventRefunded }] = await Promise.all([getDb(), import("@ezu/db")]);
+      markUsageEventRefunded(db, usageEventId);
     },
 
     async listUsageEvents(

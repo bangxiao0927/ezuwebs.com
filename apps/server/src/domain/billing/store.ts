@@ -25,13 +25,29 @@ export interface DebitResult {
   balance: number;
 }
 
+export interface RefundDebitInput {
+  userId: string;
+  /** Positive amount to credit back. */
+  credits: number;
+  reason: string;
+  /** The idempotencyKey of the debit being refunded; the refund's own idempotency is derived from it. */
+  debitIdempotencyKey: string;
+}
+
+export interface RefundDebitResult {
+  applied: boolean;
+  balance: number;
+}
+
 export interface UsageEventInput {
+  id: string;
   userId: string;
   kind: string;
   units: number;
   credits: number;
   model?: string;
   sessionId?: string;
+  status?: "succeeded" | "refunded";
 }
 
 export interface UsageEventDto {
@@ -41,6 +57,7 @@ export interface UsageEventDto {
   credits: number;
   model?: string;
   sessionId?: string;
+  status: "succeeded" | "refunded";
   createdAt: string;
 }
 
@@ -54,8 +71,10 @@ export interface ListUsageEventsResult {
 export interface BillingStore {
   appendGrant(input: AppendGrantInput): Promise<AppendGrantResult>;
   debitIfSufficient(input: DebitInput): Promise<DebitResult>;
+  refundDebit(input: RefundDebitInput): Promise<RefundDebitResult>;
   getBalance(userId: string): Promise<number>;
   insertUsageEvent(input: UsageEventInput): Promise<void>;
+  markUsageEventRefunded(usageEventId: string): Promise<void>;
   listUsageEvents(
     userId: string,
     options: { limit: number; offset: number },
@@ -71,3 +90,4 @@ export interface DevGrantPackage {
 export class InsufficientCreditsError extends Error {}
 export class DevGrantsDisabledError extends Error {}
 export class UnknownDevGrantPackageError extends Error {}
+export class MissingIdempotencyKeyError extends Error {}
