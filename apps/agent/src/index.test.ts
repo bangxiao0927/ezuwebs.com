@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { executeApprovedBlockEdit, bootstrapBlockEditDemo } from "./index.js";
 import {
   createReplacementStructurePatch,
   inferStructuralChanges,
@@ -47,4 +48,66 @@ test("createReplacementStructurePatch handles empty rejection reason gracefully"
   assert.match(patch, /blockId: 'hero'/);
   assert.match(patch, /strategy: 'replace_structure'/);
   assert.match(patch, /Restructure the block around the rejection reason/);
+});
+
+test("bootstrapBlockEditDemo stops before running the patch action so approval gates execution", async () => {
+  const events = await bootstrapBlockEditDemo({
+    sessionId: "gating-session",
+    projectId: "gating-project",
+    blockId: "hero",
+    targetPath: "apps/web/src/index.ts",
+    suggestedPrompt: "Refine the hero block copy.",
+  });
+
+  const interactionRequired = events.find((event) => event.type === "interaction.required");
+  assert.ok(interactionRequired && interactionRequired.type === "interaction.required");
+  assert.equal(interactionRequired.interaction.type, "confirm");
+  const actionId = interactionRequired.interaction.type === "confirm" ? interactionRequired.interaction.actionId : undefined;
+  assert.ok(actionId, "confirm interaction should reference the gated action");
+
+  const createdAction = events.find(
+    (event) => event.type === "action.created" && event.action.id === actionId,
+  );
+  assert.ok(createdAction && createdAction.type === "action.created");
+  assert.equal(createdAction.action.status, "pending");
+
+  const executedBeforeApproval = events.some(
+    (event) => event.type === "action.updated" && event.action.id === actionId,
+  );
+  assert.equal(executedBeforeApproval, false, "the gated action must not run before approval");
+
+  const previewCreatedBeforeApproval = events.some(
+    (event) => event.type === "action.created" && event.action.action.type === "preview.open",
+  );
+  assert.equal(previewCreatedBeforeApproval, false, "preview must not open before approval");
+});
+
+test("executeApprovedBlockEdit runs the approved action exactly once and opens a preview", async () => {
+  const events = await bootstrapBlockEditDemo({
+    sessionId: "gating-session-2",
+    projectId: "gating-project-2",
+    blockId: "hero",
+    targetPath: "apps/web/src/index.ts",
+    suggestedPrompt: "Refine the hero block copy.",
+  });
+
+  const createdAction = events.find(
+    (event) => event.type === "action.created" && event.action.action.type === "file.patch",
+  );
+  assert.ok(createdAction && createdAction.type === "action.created");
+
+  const executionEvents = await executeApprovedBlockEdit({
+    sessionId: "gating-session-2",
+    projectId: "gating-project-2",
+    action: createdAction.action,
+  });
+
+  const updates = executionEvents.filter(
+    (event) => event.type === "action.updated" && event.action.id === createdAction.action.id,
+  );
+  assert.equal(updates.length, 1, "the approved action should run exactly once");
+  assert.ok(updates[0]?.type === "action.updated" && updates[0].action.status === "completed");
+
+  const previewReady = executionEvents.some((event) => event.type === "preview.ready");
+  assert.ok(previewReady, "approval should open a preview after execution");
 });

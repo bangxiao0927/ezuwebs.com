@@ -77,3 +77,37 @@ test("an interaction cannot be resolved twice", async () => {
     InteractionConflictError,
   );
 });
+
+test("a confirm interaction gates the patch action until it is approved", async () => {
+  const created = await createSession("portfolio-dash");
+  const pending = created.viewModel.pendingInteraction;
+  if (!pending || pending.type !== "confirm") {
+    throw new Error("expected a confirm interaction");
+  }
+
+  const gatedAction = created.viewModel.actions.find((action) => action.id === pending.actionId);
+  assert.ok(gatedAction, "the confirm interaction should reference a pending action");
+  assert.equal(gatedAction.status, "pending");
+  assert.equal(created.viewModel.previews.length, 0);
+
+  const approved = await resolveApproval(created.id, pending.id, "approved", "Approved");
+  const executedAction = approved.viewModel.actions.find((action) => action.id === gatedAction.id);
+  assert.equal(executedAction?.status, "completed");
+  assert.ok(approved.viewModel.previews.length > 0, "approval should open a runtime preview");
+});
+
+test("rejecting a confirm interaction cancels the gated action instead of running it", async () => {
+  const created = await createSession("club-promo");
+  const pending = created.viewModel.pendingInteraction;
+  if (!pending || pending.type !== "confirm") {
+    throw new Error("expected a confirm interaction");
+  }
+  const gatedAction = created.viewModel.actions.find((action) => action.id === pending.actionId);
+  assert.ok(gatedAction);
+
+  const rejected = await resolveApproval(created.id, pending.id, "rejected", "Layout is confusing");
+  const cancelledAction = rejected.viewModel.actions.find((action) => action.id === gatedAction.id);
+  assert.equal(cancelledAction?.status, "cancelled");
+  assert.equal(rejected.viewModel.approvalDecision?.status, "rejected");
+  assert.equal(rejected.viewModel.approvalDecision?.followUpStrategy, "replace_structure");
+});

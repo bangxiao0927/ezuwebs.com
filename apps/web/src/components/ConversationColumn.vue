@@ -10,10 +10,13 @@ const props = defineProps<{
   onSend: () => void;
   onApprove: () => void;
   onReject: () => void;
+  onChoose: (optionId: string) => void;
+  onAnswer: () => void;
 }>();
 
 const composer = defineModel<string>("composer", { required: true });
 const rejectReason = defineModel<string>("rejectReason", { required: true });
+const answerValue = defineModel<string>("answerValue", { required: true });
 
 const pending = computed(() => props.viewModel.pendingInteraction);
 const approval = computed(() => props.viewModel.approvalDecision);
@@ -69,11 +72,42 @@ function planStatusLabel(status: string): string {
       </div>
     </article>
 
-    <article v-else-if="approval" :class="['card', approval.status === 'approved' ? 'approval-success-card' : 'approval-reject-card']">
+    <article v-else-if="pending && pending.type === 'choice'" class="card approval-card">
+      <p class="eyebrow">Choice required</p>
+      <strong>{{ pending.question }}</strong>
+      <div class="approval-actions">
+        <button
+          v-for="option in pending.options"
+          :key="option.id"
+          type="button"
+          class="approve-button"
+          :disabled="busy"
+          @click="onChoose(option.id)"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+    </article>
+
+    <article v-else-if="pending && pending.type === 'input'" class="card approval-card">
+      <p class="eyebrow">Input required</p>
+      <strong>{{ pending.label }}</strong>
+      <label class="field">
+        <span>Response</span>
+        <input v-model="answerValue" type="text" :placeholder="pending.placeholder" />
+      </label>
+      <div class="approval-actions">
+        <button type="button" class="approve-button" :disabled="busy" @click="onAnswer">Submit</button>
+      </div>
+    </article>
+
+    <article v-else-if="approval" :class="['card', approval.status === 'rejected' ? 'approval-reject-card' : 'approval-success-card']">
       <p class="eyebrow">Last decision</p>
       <strong>{{ approval.title }}</strong>
       <p class="description-text">{{ approval.summary }}</p>
       <p v-if="approval.rejectionReason" class="description-text dim">Reason: {{ approval.rejectionReason }}</p>
+      <p v-if="approval.optionId" class="description-text dim">Selected option: {{ approval.optionId }}</p>
+      <p v-if="approval.value" class="description-text dim">Provided value: {{ approval.value }}</p>
     </article>
 
     <article class="card">

@@ -32,6 +32,10 @@ importers:
       '@ezu/runtime-browser':
         specifier: workspace:*
         version: link:../../packages/runtime-browser
+    devDependencies:
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
 
   apps/server:
     dependencies:

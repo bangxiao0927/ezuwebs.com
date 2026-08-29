@@ -50,7 +50,7 @@ export interface RuntimePort {
 
 export type PendingInteraction =
   | { type: "choice"; id: string; question: string; options: Array<{ id: string; label: string; description?: string }> }
-  | { type: "confirm"; id: string; title: string; summary: string }
+  | { type: "confirm"; id: string; title: string; summary: string; actionId?: string }
   | { type: "input"; id: string; label: string; placeholder?: string };
 
 export interface WebEditorBlock {
@@ -76,11 +76,13 @@ export interface InteractiveWebEditorState {
 }
 
 export interface ApprovalDecisionState {
-  status: "approved" | "rejected";
+  status: "approved" | "rejected" | "answered";
   title: string;
   summary: string;
   rejectionReason?: string;
   followUpStrategy?: "revise" | "replace_structure";
+  optionId?: string;
+  value?: string;
 }
 
 export interface WorkbenchViewModel {

@@ -1,11 +1,12 @@
-import { bootstrapBlockEditDemo } from "@ezu/agent";
-import { type AgentEvent } from "@ezu/protocol";
+import { bootstrapBlockEditDemo, executeApprovedBlockEdit } from "@ezu/agent";
+import { type ActionState, type AgentEvent } from "@ezu/protocol";
 
 import {
   createDemoBootstrap,
   getDemoSessionDefinition,
   type DemoSessionDefinition,
 } from "./demo.js";
+import { buildChoiceResolutionEvent, buildInputResolutionEvent } from "./interaction.js";
 import { createReplacementPrompt } from "./replacement.js";
 import {
   createInteractiveWebEditorState,
@@ -54,6 +55,7 @@ export interface SessionDto {
 
 export class SessionNotFoundError extends Error {}
 export class InteractionConflictError extends Error {}
+export { InteractionValidationError } from "./interaction.js";
 
 const sessions = new Map<string, SessionRecord>();
 
@@ -247,22 +249,19 @@ export async function sendPrompt(sessionId: string, text: string): Promise<Sessi
   return toDto(record);
 }
 
-export async function resolveApproval(
-  sessionId: string,
+function findPendingInteraction(
+  events: AgentEvent[],
   interactionId: string,
-  decision: "approved" | "rejected",
-  reason: string,
-): Promise<SessionDto> {
-  const record = await ensureSession(sessionId);
+): Extract<AgentEvent, { type: "interaction.required" }> {
   const resolvedIds = new Set(
-    record.events
+    events
       .filter(
         (event): event is Extract<AgentEvent, { type: "interaction.resolved" }> =>
           event.type === "interaction.resolved",
       )
       .map((event) => event.interactionId),
   );
-  const pending = record.events
+  const pending = events
     .slice()
     .reverse()
     .find(
@@ -273,9 +272,35 @@ export async function resolveApproval(
   if (!pending || pending.interaction.id !== interactionId) {
     throw new InteractionConflictError("The interaction is missing, stale, or already resolved");
   }
+
+  return pending;
+}
+
+function findActionState(events: AgentEvent[], actionId: string): ActionState | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if ((event.type === "action.created" || event.type === "action.updated") && event.action.id === actionId) {
+      return event.action;
+    }
+  }
+  return undefined;
+}
+
+export async function resolveApproval(
+  sessionId: string,
+  interactionId: string,
+  decision: "approved" | "rejected",
+  reason: string,
+): Promise<SessionDto> {
+  const record = await ensureSession(sessionId);
+  const pending = findPendingInteraction(record.events, interactionId);
   if (pending.interaction.type !== "confirm") {
     throw new InteractionConflictError("This interaction requires a choice or text response");
   }
+
+  const gatedAction = pending.interaction.actionId
+    ? findActionState(record.events, pending.interaction.actionId)
+    : undefined;
 
   record.events.push({
     type: "interaction.resolved",
@@ -291,7 +316,23 @@ export async function resolveApproval(
       : {}),
   });
 
-  if (decision === "rejected") {
+  if (decision === "approved") {
+    if (gatedAction && gatedAction.status === "pending") {
+      const executionEvents = await executeApprovedBlockEdit({
+        sessionId: record.id,
+        projectId: record.bootstrap.projectId,
+        action: gatedAction,
+      });
+      record.events.push(...dropNoisyEvents(executionEvents));
+    }
+  } else {
+    if (gatedAction && gatedAction.status === "pending") {
+      record.events.push({
+        type: "action.updated",
+        action: { ...gatedAction, status: "cancelled", updatedAt: new Date().toISOString() },
+      });
+    }
+
     const selectedEditor = createInteractiveWebEditorState(record.webEditor);
     record.webEditor = {
       ...selectedEditor,
@@ -302,5 +343,35 @@ export async function resolveApproval(
     };
   }
 
+  return toDto(record);
+}
+
+export async function resolveChoiceInteraction(
+  sessionId: string,
+  interactionId: string,
+  optionId: string,
+): Promise<SessionDto> {
+  const record = await ensureSession(sessionId);
+  const pending = findPendingInteraction(record.events, interactionId);
+  if (pending.interaction.type !== "choice") {
+    throw new InteractionConflictError("This interaction requires an approval decision");
+  }
+
+  record.events.push(buildChoiceResolutionEvent(pending.interaction, optionId));
+  return toDto(record);
+}
+
+export async function resolveInputInteraction(
+  sessionId: string,
+  interactionId: string,
+  value: string,
+): Promise<SessionDto> {
+  const record = await ensureSession(sessionId);
+  const pending = findPendingInteraction(record.events, interactionId);
+  if (pending.interaction.type !== "input") {
+    throw new InteractionConflictError("This interaction requires an approval decision");
+  }
+
+  record.events.push(buildInputResolutionEvent(pending.interaction, value));
   return toDto(record);
 }

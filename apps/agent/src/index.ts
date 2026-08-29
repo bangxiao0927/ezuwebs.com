@@ -8,7 +8,7 @@ import {
   type RuntimeAdapter,
 } from "@ezu/core";
 import { createModelGateway } from "@ezu/model-gateway";
-import { type AgentEvent } from "@ezu/protocol";
+import { type ActionState, type AgentEvent } from "@ezu/protocol";
 import { createBrowserRuntimeStub } from "@ezu/runtime-browser";
 
 import { createReplacementStructurePatch, normalizeReason } from "./replacement.js";
@@ -22,6 +22,10 @@ export interface BlockEditDemoOptions extends AgentAppOptions {
   blockId: string;
   targetPath: string;
   suggestedPrompt: string;
+}
+
+export interface ApprovedBlockEditExecutionOptions extends AgentAppOptions {
+  action: ActionState;
 }
 
 export interface ReplacementBlockEditDemoOptions extends BlockEditDemoOptions {
@@ -76,15 +80,7 @@ export async function bootstrapBlockEditDemo(
   sessionStore.upsert(session);
 
   const gateway = createModelGateway();
-  const runtime = createBrowserRuntimeStub();
-  const executor = createExecutor({ runtime, sessionStore });
   const messageId = crypto.randomUUID();
-  const stopBridging = await bridgeRuntimeEvents({
-    runtime,
-    apply: (event) => {
-      session = applyEvent(session, events, event);
-    },
-  });
 
   session = applyEvent(session, events, {
     type: "message.delta",
@@ -161,6 +157,7 @@ export async function bootstrapBlockEditDemo(
       id: crypto.randomUUID(),
       title: `Review patch for ${options.blockId}`,
       summary: `This patch updates ${options.targetPath}. Confirm the block-scoped edit before applying it to the runtime replay.`,
+      actionId: fileAction.id,
     },
   });
 
@@ -169,35 +166,63 @@ export async function bootstrapBlockEditDemo(
     action: fileAction,
   });
 
-  const completedFileAction = await executor.enqueue(fileAction);
-  session = applyEvent(session, events, {
-    type: "action.updated",
-    action: completedFileAction,
-  });
-
-  const previewAction = createTimelineAction({
-    source: "system",
-    action: {
-      type: "preview.open",
-      port: 4174,
-    },
-  });
-
-  session = applyEvent(session, events, {
-    type: "action.created",
-    action: previewAction,
-  });
-
-  const completedPreviewAction = await executor.enqueue(previewAction);
-  session = applyEvent(session, events, {
-    type: "action.updated",
-    action: completedPreviewAction,
-  });
-
   session = applyEvent(session, events, {
     type: "message.completed",
     messageId,
   });
+
+  sessionStore.upsert(session);
+
+  return events;
+}
+
+export async function executeApprovedBlockEdit(
+  options: ApprovedBlockEditExecutionOptions,
+): Promise<AgentEvent[]> {
+  const sessionStore = createSessionStore();
+  let session = createSessionState({
+    id: options.sessionId,
+    projectId: options.projectId,
+  });
+  const events: AgentEvent[] = [];
+
+  sessionStore.upsert(session);
+
+  const runtime = createBrowserRuntimeStub();
+  const executor = createExecutor({ runtime, sessionStore });
+  const stopBridging = await bridgeRuntimeEvents({
+    runtime,
+    apply: (event) => {
+      session = applyEvent(session, events, event);
+    },
+  });
+
+  const completedAction = await executor.enqueue(options.action);
+  session = applyEvent(session, events, {
+    type: "action.updated",
+    action: completedAction,
+  });
+
+  if (completedAction.status === "completed") {
+    const previewAction = createTimelineAction({
+      source: "system",
+      action: {
+        type: "preview.open",
+        port: 4174,
+      },
+    });
+
+    session = applyEvent(session, events, {
+      type: "action.created",
+      action: previewAction,
+    });
+
+    const completedPreviewAction = await executor.enqueue(previewAction);
+    session = applyEvent(session, events, {
+      type: "action.updated",
+      action: completedPreviewAction,
+    });
+  }
 
   sessionStore.upsert(session);
   stopBridging();
