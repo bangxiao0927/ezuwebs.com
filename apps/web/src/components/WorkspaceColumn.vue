@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 
 import type { PatchStrategy, WorkbenchViewModel, WorkspaceFile } from "../types";
 
@@ -21,10 +21,20 @@ const propertyValues = defineModel<Record<string, string>>("propertyValues", { r
 const editor = computed(() => props.viewModel.webEditor);
 const selectedBlockId = computed(() => editor.value.selectedBlockId);
 
-const previewUrl = computed(() => {
-  const port = props.viewModel.previews.at(-1);
-  return port?.url;
+const preview = computed(() => props.viewModel.previews.at(-1));
+const previewUrl = computed(() => preview.value?.url);
+const previewState = ref<"loading" | "ready" | "failed">("loading");
+const previewAttempt = ref(0);
+
+watch(previewUrl, () => {
+  previewState.value = "loading";
+  previewAttempt.value += 1;
 });
+
+function retryPreview(): void {
+  previewState.value = "loading";
+  previewAttempt.value += 1;
+}
 
 const selectedDiff = computed(() => props.viewModel.selectedDiffAction);
 
@@ -126,7 +136,22 @@ const terminalLines = computed(() => {
 
       <div class="surface-body">
         <template v-if="viewMode === 'preview'">
-          <iframe v-if="previewUrl" class="preview-frame" :src="previewUrl" title="Session preview"></iframe>
+          <div v-if="previewUrl" class="preview-container">
+            <iframe
+              :key="`${previewUrl}-${previewAttempt}`"
+              class="preview-frame"
+              :src="previewUrl"
+              title="Session preview"
+              @load="previewState = 'ready'"
+              @error="previewState = 'failed'"
+            ></iframe>
+            <div v-if="previewState === 'loading'" class="preview-status">Loading preview…</div>
+            <div v-else-if="previewState === 'failed'" class="preview-status preview-error">
+              <strong>Preview failed to load</strong>
+              <span>Session preview on port {{ preview?.port }} could not be displayed.</span>
+              <button type="button" class="secondary-button" @click="retryPreview">Retry</button>
+            </div>
+          </div>
           <div v-else class="empty-state">No preview available yet. Generate a patch to open one.</div>
         </template>
 

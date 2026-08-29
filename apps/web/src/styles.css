@@ -480,6 +480,32 @@ textarea {
   background: white;
 }
 
+.preview-container {
+  position: relative;
+  display: grid;
+  min-height: 320px;
+}
+
+.preview-status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  background: rgba(11, 15, 23, 0.92);
+  color: var(--muted);
+}
+
+.preview-error strong {
+  color: #ffaaa5;
+}
+
+.preview-error .secondary-button {
+  justify-self: center;
+}
+
 .code-header {
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);
