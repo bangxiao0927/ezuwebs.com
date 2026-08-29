@@ -240,6 +240,37 @@ button:disabled {
   font-size: 0.82rem;
 }
 
+.credits-disclaimer {
+  margin: 0;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: var(--panel-2);
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.credits-package-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 18px;
+}
+
+.credits-package-card:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.usage-event-list {
+  display: grid;
+  gap: 12px;
+}
+
+.usage-pagination {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
 .workspace {
   min-height: 100vh;
   display: grid;

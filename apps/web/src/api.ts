@@ -1,10 +1,12 @@
 import type {
   ApprovalDecision,
   AuthUser,
+  BillingSummary,
   Dashboard,
   PatchStrategy,
   Session,
   SessionSummary,
+  UsagePage,
   WebEditorProperty,
   WorkspaceFile,
 } from "./types";
@@ -161,4 +163,27 @@ export async function resolveInput(
     },
   );
   return data.session;
+}
+
+export async function getBillingSummary(): Promise<BillingSummary> {
+  return request<BillingSummary>("/billing/summary");
+}
+
+export async function getUsage(options: { limit?: number; offset?: number } = {}): Promise<UsagePage> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) {
+    params.set("limit", String(options.limit));
+  }
+  if (options.offset !== undefined) {
+    params.set("offset", String(options.offset));
+  }
+  const query = params.toString();
+  return request<UsagePage>(`/billing/usage${query ? `?${query}` : ""}`);
+}
+
+export async function grantDevCredits(packageId: string): Promise<BillingSummary> {
+  return request<BillingSummary>("/billing/dev-grant", {
+    method: "POST",
+    body: JSON.stringify({ packageId }),
+  });
 }

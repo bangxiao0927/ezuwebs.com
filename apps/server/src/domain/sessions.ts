@@ -1,6 +1,7 @@
 import { bootstrapBlockEditDemo, executeApprovedBlockEdit } from "@ezu/agent";
 import { type ActionState, type AgentEvent } from "@ezu/protocol";
 
+import { chargeUsage } from "./billing/billing-service.js";
 import {
   createDemoBootstrap,
   getDemoSessionDefinition,
@@ -53,6 +54,7 @@ export class SessionNotFoundError extends Error {}
 export class InteractionConflictError extends Error {}
 export class ActionRetryConflictError extends Error {}
 export { InteractionValidationError } from "./interaction.js";
+export { InsufficientCreditsError } from "./billing/billing-service.js";
 
 let sessionRepository = createMemorySessionRepository();
 
@@ -214,6 +216,9 @@ export async function applyEdit(
   requestingUserId?: string,
 ): Promise<SessionDto> {
   const record = await ensureSession(sessionId, requestingUserId);
+  if (requestingUserId && input.runAgent !== false) {
+    await chargeUsage(requestingUserId, { kind: "edit", sessionId: record.id });
+  }
   const selectedState = createInteractiveWebEditorState(record.webEditor);
   const blockId = selectedState.selectedBlockId ?? selectedState.blocks[0]?.id ?? "workbench";
 
@@ -256,6 +261,9 @@ export async function sendPrompt(
   requestingUserId?: string,
 ): Promise<SessionDto> {
   const record = await ensureSession(sessionId, requestingUserId);
+  if (requestingUserId) {
+    await chargeUsage(requestingUserId, { kind: "prompt", sessionId: record.id });
+  }
   const selectedEditor = createInteractiveWebEditorState(record.webEditor);
   const blockId = selectedEditor.selectedBlockId ?? selectedEditor.blocks[0]?.id ?? "workbench";
 

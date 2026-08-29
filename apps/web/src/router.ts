@@ -1,7 +1,7 @@
 import { onMounted, onUnmounted, ref } from "vue";
 
 export interface Route {
-  name: "launcher" | "session" | "dashboard";
+  name: "launcher" | "session" | "dashboard" | "credits" | "usage";
   sessionId?: string;
 }
 
@@ -13,6 +13,12 @@ function parseHash(): Route {
   }
   if (/^\/dashboard/.test(hash)) {
     return { name: "dashboard" };
+  }
+  if (/^\/credits/.test(hash)) {
+    return { name: "credits" };
+  }
+  if (/^\/usage/.test(hash)) {
+    return { name: "usage" };
   }
   return { name: "launcher" };
 }
@@ -40,4 +46,12 @@ export function navigateHome(): void {
 
 export function navigateToDashboard(): void {
   window.location.hash = "#/dashboard";
+}
+
+export function navigateToCredits(): void {
+  window.location.hash = "#/credits";
+}
+
+export function navigateToUsage(): void {
+  window.location.hash = "#/usage";
 }

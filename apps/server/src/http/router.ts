@@ -2,6 +2,8 @@ import { type IncomingMessage, type ServerResponse } from "node:http";
 
 import type { AuthServicePort } from "./auth-routes.js";
 import { handleAuthRoute } from "./auth-routes.js";
+import { handleBillingRoute } from "./billing-routes.js";
+import { readJsonBody } from "./body.js";
 import { parseCookies } from "./cookies.js";
 import {
   applyEdit,
@@ -14,6 +16,7 @@ import {
   resolveInputInteraction,
   retryAction,
   ActionRetryConflictError,
+  InsufficientCreditsError,
   InteractionConflictError,
   InteractionValidationError,
   SessionNotFoundError,
@@ -37,18 +40,6 @@ function sendJson(response: ServerResponse, status: number, payload: unknown): v
     "access-control-allow-methods": "GET,POST,OPTIONS",
   });
   response.end(body);
-}
-
-async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(chunk as Buffer);
-  }
-  const raw = Buffer.concat(chunks).toString("utf8").trim();
-  if (!raw) {
-    return {} as T;
-  }
-  return JSON.parse(raw) as T;
 }
 
 export interface CreateApiHandlerOptions {
@@ -113,6 +104,14 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
       if (segments[1] === "auth") {
         const authService = options.authService ?? (await resolveDefaultAuthService());
         const handled = await handleAuthRoute(segments, method, request, response, authService, sendJson);
+        if (handled) {
+          return;
+        }
+      }
+
+      if (segments[1] === "billing") {
+        const authService = options.authService ?? (await resolveDefaultAuthService());
+        const handled = await handleBillingRoute(segments, method, request, response, authService, sendJson);
         if (handled) {
           return;
         }
@@ -275,6 +274,8 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
               ? 400
             : error instanceof ActionRetryConflictError
               ? 409
+            : error instanceof InsufficientCreditsError
+              ? 402
             : 500;
       sendJson(response, status, {
         error: error instanceof Error ? error.message : "Internal server error",

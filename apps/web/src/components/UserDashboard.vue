@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 
 import { getDashboard, logout } from "../api";
-import { navigateHome, navigateToSession } from "../router";
+import { navigateHome, navigateToCredits, navigateToSession, navigateToUsage } from "../router";
 import type { Dashboard } from "../types";
 
 const dashboard = ref<Dashboard | null>(null);
@@ -45,6 +45,8 @@ function openProject(projectId: string): void {
           <p class="dashboard-user-plan">Plan: {{ dashboard.user.plan }}</p>
         </div>
         <div class="dashboard-header-actions">
+          <button type="button" class="dashboard-home-button" @click="navigateToCredits">Credits</button>
+          <button type="button" class="dashboard-home-button" @click="navigateToUsage">Usage</button>
           <button type="button" class="dashboard-home-button" @click="navigateHome">Back to launcher</button>
           <button type="button" class="dashboard-signout-button" @click="signOut">Sign out</button>
         </div>
