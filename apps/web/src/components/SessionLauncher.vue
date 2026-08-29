@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 
-import { createSession, listSessions } from "../api";
+import { createSession, getCurrentUser, googleSignInUrl, listSessions, logout } from "../api";
 import { navigateToSession } from "../router";
-import type { SessionSummary } from "../types";
+import type { AuthUser, SessionSummary } from "../types";
 
 const sessions = ref<SessionSummary[]>([]);
 const loading = ref(true);
 const error = ref<string | undefined>();
 const openingId = ref<string | undefined>();
+const user = ref<AuthUser | null>(null);
+const authLoading = ref(true);
 
 onMounted(async () => {
   try {
@@ -18,7 +20,24 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
+
+  try {
+    user.value = await getCurrentUser();
+  } catch {
+    user.value = null;
+  } finally {
+    authLoading.value = false;
+  }
 });
+
+function signInWithGoogle(): void {
+  window.location.href = googleSignInUrl();
+}
+
+async function signOut(): Promise<void> {
+  await logout();
+  user.value = null;
+}
 
 async function open(session: SessionSummary): Promise<void> {
   if (openingId.value) return;
@@ -38,6 +57,16 @@ async function open(session: SessionSummary): Promise<void> {
 <template>
   <main class="launcher">
     <header class="launcher-hero">
+      <div class="launcher-auth">
+        <span v-if="authLoading" class="launcher-auth-status">Checking sign-in…</span>
+        <template v-else-if="user">
+          <span class="launcher-auth-status">Signed in as {{ user.name ?? user.email }}</span>
+          <button type="button" class="launcher-auth-button" @click="signOut">Sign out</button>
+        </template>
+        <button v-else type="button" class="launcher-auth-button" @click="signInWithGoogle">
+          Sign in with Google
+        </button>
+      </div>
       <p class="eyebrow">ezuwebs.com</p>
       <h1>AI Web Building Workspace</h1>
       <p class="lede">

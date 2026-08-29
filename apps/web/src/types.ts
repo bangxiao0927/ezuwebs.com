@@ -127,3 +127,10 @@ export interface WorkspaceFile {
 
 export type PatchStrategy = "replace" | "append" | "refine";
 export type ApprovalDecision = "approved" | "rejected";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name?: string;
+  avatarUrl?: string;
+}

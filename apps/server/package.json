@@ -9,11 +9,12 @@
     "start": "tsx src/main.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/index.test.ts"
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@ezu/agent": "workspace:*",
     "@ezu/core": "workspace:*",
+    "@ezu/db": "workspace:*",
     "@ezu/protocol": "workspace:*",
     "@ezu/ui": "workspace:*"
   },
