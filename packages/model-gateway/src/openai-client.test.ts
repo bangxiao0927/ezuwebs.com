@@ -249,3 +249,34 @@ test("createRealModelGateway warns when the response is truncated", async () => 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("createRealModelGateway warns when completed output has no valid structure", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    createStreamingResponse([
+      toSse('{"message":"no plan here"}'),
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n`,
+      "data: [DONE]\n",
+    ]);
+
+  try {
+    const gateway = createRealModelGateway({
+      clientConfig: { apiKey: "test-key", baseUrl: "https://example.test" },
+    });
+    const events = [];
+    for await (const event of gateway.streamPlan({ prompt: "Make a plan" })) {
+      events.push(event);
+    }
+
+    const warning = events.find(
+      (event) =>
+        event.type === "message.delta" &&
+        event.text.includes("did not contain valid structured plan"),
+    );
+    assert.ok(warning, "expected an invalid-structure warning delta");
+    assert.ok(!events.some((event) => event.type === "plan.updated"));
+    assert.equal(events.at(-1)?.type, "message.completed");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

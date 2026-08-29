@@ -134,6 +134,22 @@ function extractLastJsonObjectWithKey(
   return undefined;
 }
 
+function structuredOutputWarning(
+  outputName: "plan" | "code output",
+  finishReason: ChatCompletionChunk["finishReason"],
+): string {
+  if (finishReason === "length") {
+    return `[warning] The ${outputName} was truncated before a complete response was produced (token limit reached).`;
+  }
+  if (finishReason === "content_filter") {
+    return `[warning] The ${outputName} was blocked before valid structured output was produced (content filter).`;
+  }
+  if (finishReason === "tool_calls") {
+    return `[warning] The ${outputName} ended with an unsupported tool call instead of valid structured output.`;
+  }
+  return `[warning] The model response did not contain valid structured ${outputName}. Please retry.`;
+}
+
 export function createRealModelGateway(options: RealModelGatewayOptions): ModelGateway {
   const client = createOpenAIClient(options.clientConfig);
   const {
@@ -177,20 +193,22 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
 
       // Parse the structured JSON from the response.
       const parsed = extractLastJsonObjectWithKey(fullText, "plan");
+      const plan = Array.isArray(parsed?.plan)
+        ? (parsed.plan as Record<string, unknown>[])
+        : undefined;
 
-      // Surface truncation so a silently missing plan is explainable.
-      if (!parsed && finishReason === "length") {
+      if (!plan) {
         yield {
           type: "message.delta",
           messageId,
-          text: "\n\n[warning] The plan was truncated before a complete response was produced (token limit reached).",
+          text: `\n\n${structuredOutputWarning("plan", finishReason)}`,
         };
       }
 
-      if (parsed?.plan && Array.isArray(parsed.plan)) {
+      if (plan) {
         yield {
           type: "plan.updated",
-          plan: parsed.plan.map((step: Record<string, unknown>) => ({
+          plan: plan.map((step) => ({
             id: String(step.id ?? crypto.randomUUID()),
             title: String(step.title ?? "Untitled step"),
             ...(step.description ? { description: String(step.description) } : {}),
@@ -263,18 +281,20 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
       }
 
       const parsed = extractLastJsonObjectWithKey(fullText, "actions");
+      const actions = Array.isArray(parsed?.actions)
+        ? (parsed.actions as Record<string, unknown>[])
+        : undefined;
 
-      // Surface truncation so silently missing actions are explainable.
-      if (!parsed && finishReason === "length") {
+      if (!actions) {
         yield {
           type: "message.delta",
           messageId,
-          text: "\n\n[warning] The code output was truncated before a complete response was produced (token limit reached).",
+          text: `\n\n${structuredOutputWarning("code output", finishReason)}`,
         };
       }
 
-      if (parsed?.actions && Array.isArray(parsed.actions)) {
-        for (const act of parsed.actions as Record<string, unknown>[]) {
+      if (actions) {
+        for (const act of actions) {
           const timestamp = new Date().toISOString();
           const actionType = String(act.type ?? "");
 
