@@ -167,6 +167,15 @@ export function markUsageEventRefunded(db: EzuDb, id: string): void {
   db.update(usageEvents).set({ status: "refunded" }).where(eq(usageEvents.id, id)).run();
 }
 
+export function getUsageEventStatus(db: EzuDb, id: string): "succeeded" | "refunded" | undefined {
+  const row = db
+    .select({ status: usageEvents.status })
+    .from(usageEvents)
+    .where(eq(usageEvents.id, id))
+    .get();
+  return row?.status;
+}
+
 export interface ListUsageEventsResult {
   events: UsageEvent[];
   total: number;

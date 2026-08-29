@@ -115,5 +115,9 @@ export function createMemoryBillingStore(): BillingStore {
       });
       return { events: page, total, totalCreditsConsumed };
     },
+
+    async getUsageEventStatus(usageEventId: string): Promise<"succeeded" | "refunded" | undefined> {
+      return usage.find((row) => row.id === usageEventId)?.status;
+    },
   };
 }

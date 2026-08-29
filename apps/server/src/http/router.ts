@@ -21,6 +21,7 @@ import {
   InteractionConflictError,
   InteractionValidationError,
   MissingIdempotencyKeyError,
+  PreviousAttemptFailedError,
   SessionNotFoundError,
   selectBlock,
   sendPrompt,
@@ -340,6 +341,8 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
               ? 402
             : error instanceof MissingIdempotencyKeyError
               ? 400
+            : error instanceof PreviousAttemptFailedError
+              ? 409
             : 500;
       sendJson(response, status, {
         error: error instanceof Error ? error.message : "Internal server error",

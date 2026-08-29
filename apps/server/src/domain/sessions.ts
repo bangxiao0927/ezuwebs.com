@@ -54,7 +54,11 @@ export class SessionNotFoundError extends Error {}
 export class InteractionConflictError extends Error {}
 export class ActionRetryConflictError extends Error {}
 export { InteractionValidationError } from "./interaction.js";
-export { InsufficientCreditsError, MissingIdempotencyKeyError } from "./billing/billing-service.js";
+export {
+  InsufficientCreditsError,
+  MissingIdempotencyKeyError,
+  PreviousAttemptFailedError,
+} from "./billing/billing-service.js";
 
 let sessionRepository = createMemorySessionRepository();
 
@@ -272,6 +276,7 @@ export async function applyEdit(
       await refundUsageCharge({
         userId: requestingUserId!,
         kind: "edit",
+        sessionId: record.id,
         requestId: input.requestId ?? "",
         reason: "edit failed after charge",
       });
@@ -344,6 +349,7 @@ export async function sendPrompt(
       await refundUsageCharge({
         userId: requestingUserId!,
         kind: "prompt",
+        sessionId: record.id,
         requestId: requestId ?? "",
         reason: "prompt failed after charge",
       });

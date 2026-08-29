@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createMemoryBillingStore } from "./billing/memory-billing-store.js";
 import {
   FREE_GRANT_CREDITS,
+  PreviousAttemptFailedError,
   USAGE_COSTS,
   configureBillingStore,
   getBillingSummary,
@@ -67,4 +68,32 @@ test("sendPrompt does not re-run the agent or debit twice when replaying the sam
 
   const summary = await getBillingSummary(USER_ID);
   assert.equal(summary.balance, FREE_GRANT_CREDITS - USAGE_COSTS["prompt"]!);
+});
+
+function repositoryWithSaveFailingOnce(): SessionRepository {
+  const memory = createMemorySessionRepository();
+  let shouldFail = true;
+  return {
+    ...memory,
+    async save(record) {
+      if (shouldFail) {
+        shouldFail = false;
+        throw new Error("save failed");
+      }
+      return memory.save(record);
+    },
+  };
+}
+
+test("sendPrompt refuses a replay of a requestId whose earlier attempt failed and was refunded", async () => {
+  resetBilling();
+  configureSessionRepository(repositoryWithSaveFailingOnce());
+  const session = await createSession("club-promo", USER_ID);
+
+  await assert.rejects(sendPrompt(session.id, "Make the hero more concise", USER_ID, "req-1"));
+
+  await assert.rejects(
+    sendPrompt(session.id, "Make the hero more concise", USER_ID, "req-1"),
+    PreviousAttemptFailedError,
+  );
 });

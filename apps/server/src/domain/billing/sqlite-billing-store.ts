@@ -84,6 +84,11 @@ export function createSqliteBillingStore(options: OpenDatabaseOptions = {}): Bil
       markUsageEventRefunded(db, usageEventId);
     },
 
+    async getUsageEventStatus(usageEventId: string): Promise<"succeeded" | "refunded" | undefined> {
+      const [db, { getUsageEventStatus }] = await Promise.all([getDb(), import("@ezu/db")]);
+      return getUsageEventStatus(db, usageEventId);
+    },
+
     async listUsageEvents(
       userId: string,
       options: { limit: number; offset: number },

@@ -79,6 +79,7 @@ export interface BillingStore {
     userId: string,
     options: { limit: number; offset: number },
   ): Promise<ListUsageEventsResult>;
+  getUsageEventStatus(usageEventId: string): Promise<"succeeded" | "refunded" | undefined>;
 }
 
 export interface DevGrantPackage {
@@ -91,3 +92,5 @@ export class InsufficientCreditsError extends Error {}
 export class DevGrantsDisabledError extends Error {}
 export class UnknownDevGrantPackageError extends Error {}
 export class MissingIdempotencyKeyError extends Error {}
+/** A prior attempt for this requestId ran and was refunded; retrying with the same requestId is refused. */
+export class PreviousAttemptFailedError extends Error {}

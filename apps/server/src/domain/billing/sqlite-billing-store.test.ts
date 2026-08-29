@@ -85,4 +85,6 @@ test("sqlite-backed billing store enforces idempotent grants and sufficient-bala
   const afterRefund = await store.listUsageEvents(user.id, { limit: 10, offset: 0 });
   assert.equal(afterRefund.events[0]?.status, "refunded");
   assert.equal(afterRefund.totalCreditsConsumed, 0);
+  assert.equal(await store.getUsageEventStatus("usage-event:1"), "refunded");
+  assert.equal(await store.getUsageEventStatus("no-such-event"), undefined);
 });

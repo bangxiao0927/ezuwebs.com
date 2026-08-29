@@ -7,6 +7,7 @@ import {
   FREE_GRANT_CREDITS,
   InsufficientCreditsError,
   MissingIdempotencyKeyError,
+  PreviousAttemptFailedError,
   UnknownDevGrantPackageError,
   USAGE_COSTS,
   chargeUsage,
@@ -111,6 +112,20 @@ test("refundUsageCharge is idempotent: replaying it does not refund twice", asyn
   assert.equal(summary.balance, FREE_GRANT_CREDITS);
 });
 
+test("chargeUsage rejects replaying a requestId that was already refunded, instead of pretending success", async () => {
+  resetBilling();
+  await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+  await refundUsageCharge({ userId: "user-a", kind: "prompt", requestId: "req-1", reason: "agent failed" });
+
+  await assert.rejects(
+    chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" }),
+    PreviousAttemptFailedError,
+  );
+
+  const summary = await getBillingSummary("user-a");
+  assert.equal(summary.balance, FREE_GRANT_CREDITS);
+});
+
 test("chargeUsage records a usage event that shows up in listBillingUsage", async () => {
   resetBilling();
   await chargeUsage({ userId: "user-a", kind: "prompt", sessionId: "session-1", requestId: "req-1" });
@@ -123,6 +138,37 @@ test("chargeUsage records a usage event that shows up in listBillingUsage", asyn
   assert.equal(page.events[0]?.status, "succeeded");
   assert.equal(page.total, 1);
   assert.equal(page.totalCreditsConsumed, USAGE_COSTS["prompt"]);
+});
+
+test("chargeUsage keys the idempotency check on kind and session, not requestId alone", async () => {
+  resetBilling();
+  const promptCharge = await chargeUsage({
+    userId: "user-a",
+    kind: "prompt",
+    sessionId: "session-1",
+    requestId: "req-1",
+  });
+  const editChargeSameRequestId = await chargeUsage({
+    userId: "user-a",
+    kind: "edit",
+    sessionId: "session-1",
+    requestId: "req-1",
+  });
+  const promptChargeOtherSession = await chargeUsage({
+    userId: "user-a",
+    kind: "prompt",
+    sessionId: "session-2",
+    requestId: "req-1",
+  });
+
+  assert.equal(promptCharge.applied, true);
+  assert.equal(editChargeSameRequestId.applied, true);
+  assert.equal(promptChargeOtherSession.applied, true);
+  assert.notEqual(promptCharge.usageEventId, editChargeSameRequestId.usageEventId);
+  assert.notEqual(promptCharge.usageEventId, promptChargeOtherSession.usageEventId);
+
+  const page = await listBillingUsage("user-a");
+  assert.equal(page.total, 3);
 });
 
 test("listBillingUsage clamps limit and offset to safe bounds", async () => {

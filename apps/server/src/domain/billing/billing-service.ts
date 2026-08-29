@@ -4,6 +4,7 @@ import {
   DevGrantsDisabledError,
   InsufficientCreditsError,
   MissingIdempotencyKeyError,
+  PreviousAttemptFailedError,
   UnknownDevGrantPackageError,
 } from "./store.js";
 
@@ -11,6 +12,7 @@ export {
   DevGrantsDisabledError,
   InsufficientCreditsError,
   MissingIdempotencyKeyError,
+  PreviousAttemptFailedError,
   UnknownDevGrantPackageError,
 };
 
@@ -130,12 +132,24 @@ export async function grantDevCredits(userId: string, packageId: string): Promis
   return { balance, devGrantsEnabled: true, devGrantPackages: DEV_GRANT_PACKAGES };
 }
 
-function debitIdempotencyKeyFor(userId: string, requestId: string): string {
-  return `usage-debit:${userId}:${requestId}`;
+interface UsageChargeKeyInput {
+  userId: string;
+  kind: string;
+  sessionId?: string;
+  requestId: string;
 }
 
-function usageEventIdFor(userId: string, requestId: string): string {
-  return `usage-event:${userId}:${requestId}`;
+/**
+ * Includes kind and sessionId alongside userId+requestId so a requestId
+ * reused across kinds or sessions (a client bug, not a legitimate replay)
+ * cannot collide with an unrelated charge.
+ */
+function debitIdempotencyKeyFor(input: UsageChargeKeyInput): string {
+  return `usage-debit:${input.userId}:${input.kind}:${input.sessionId ?? "-"}:${input.requestId}`;
+}
+
+function usageEventIdFor(input: UsageChargeKeyInput): string {
+  return `usage-event:${input.userId}:${input.kind}:${input.sessionId ?? "-"}:${input.requestId}`;
 }
 
 export interface ChargeUsageInput {
@@ -160,7 +174,7 @@ export async function chargeUsage(input: ChargeUsageInput): Promise<ChargeUsageR
   }
   await ensureFreeGrant(input.userId);
   const credits = USAGE_COSTS[input.kind] ?? 0;
-  const debitIdempotencyKey = debitIdempotencyKeyFor(input.userId, input.requestId);
+  const debitIdempotencyKey = debitIdempotencyKeyFor(input);
   const result = await billingStore.debitIfSufficient({
     userId: input.userId,
     credits,
@@ -170,8 +184,14 @@ export async function chargeUsage(input: ChargeUsageInput): Promise<ChargeUsageR
   if (!result.sufficient) {
     throw new InsufficientCreditsError("Insufficient credits");
   }
-  const usageEventId = usageEventIdFor(input.userId, input.requestId);
+  const usageEventId = usageEventIdFor(input);
   if (!result.applied) {
+    const priorStatus = await billingStore.getUsageEventStatus(usageEventId);
+    if (priorStatus === "refunded") {
+      throw new PreviousAttemptFailedError(
+        "A previous attempt for this requestId failed and was refunded; retry with a new requestId",
+      );
+    }
     return { applied: false, usageEventId, balance: result.balance };
   }
   await billingStore.insertUsageEvent({
@@ -190,6 +210,7 @@ export async function chargeUsage(input: ChargeUsageInput): Promise<ChargeUsageR
 export interface RefundUsageChargeInput {
   userId: string;
   kind: string;
+  sessionId?: string;
   requestId: string;
   reason: string;
 }
@@ -200,12 +221,12 @@ export interface RefundUsageChargeInput {
  */
 export async function refundUsageCharge(input: RefundUsageChargeInput): Promise<void> {
   const credits = USAGE_COSTS[input.kind] ?? 0;
-  const debitIdempotencyKey = debitIdempotencyKeyFor(input.userId, input.requestId);
+  const debitIdempotencyKey = debitIdempotencyKeyFor(input);
   await billingStore.refundDebit({
     userId: input.userId,
     credits,
     reason: input.reason,
     debitIdempotencyKey,
   });
-  await billingStore.markUsageEventRefunded(usageEventIdFor(input.userId, input.requestId));
+  await billingStore.markUsageEventRefunded(usageEventIdFor(input));
 }
