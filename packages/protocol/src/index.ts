@@ -16,6 +16,21 @@ export type ActionLifecycleStatus = z.infer<typeof actionLifecycleStatusSchema>;
 export const conversationRoleSchema = z.enum(["user", "assistant", "system", "tool"]);
 export type ConversationRole = z.infer<typeof conversationRoleSchema>;
 
+export const errorCategorySchema = z.enum([
+  "timeout",
+  "network",
+  "structured_output",
+  "token_limit",
+  "conflict",
+  "permission",
+  "command_failed",
+  "unknown",
+]);
+export type ErrorCategory = z.infer<typeof errorCategorySchema>;
+
+export const sessionLifecycleStatusSchema = z.enum(["active", "paused", "completed", "errored"]);
+export type SessionLifecycleStatus = z.infer<typeof sessionLifecycleStatusSchema>;
+
 export const conversationMessageSchema = z.object({
   id: z.string(),
   role: conversationRoleSchema,
@@ -143,6 +158,7 @@ export const sessionStateSchema = z.object({
   actions: z.array(actionStateSchema),
   pendingInteraction: pendingInteractionSchema.optional(),
   runtime: runtimeSnapshotSchema,
+  status: sessionLifecycleStatusSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -199,6 +215,18 @@ export const agentEventSchema = z.discriminatedUnion("type", [
     followUpStrategy: z.enum(["revise", "replace_structure"]).optional(),
     optionId: z.string().optional(),
     value: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("execution.error"),
+    code: errorCategorySchema,
+    message: z.string(),
+    recoverable: z.boolean(),
+    actionId: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("session.lifecycle"),
+    status: sessionLifecycleStatusSchema,
+    reason: z.string().optional(),
   }),
 ]);
 export type AgentEvent = z.infer<typeof agentEventSchema>;

@@ -11,6 +11,8 @@ import {
   resolveApproval,
   resolveChoiceInteraction,
   resolveInputInteraction,
+  retryAction,
+  ActionRetryConflictError,
   InteractionConflictError,
   InteractionValidationError,
   SessionNotFoundError,
@@ -202,6 +204,12 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
           sendJson(response, 400, { error: "optionId or value is required" });
           return;
         }
+
+        if (action === "actions" && segments[5] === "retry" && method === "POST") {
+          const actionId = decodeURIComponent(segments[4]!);
+          sendJson(response, 200, { session: await retryAction(sessionId, actionId) });
+          return;
+        }
       }
 
       sendJson(response, 404, { error: "Not found" } satisfies JsonError);
@@ -213,6 +221,8 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
             ? 409
             : error instanceof InteractionValidationError
               ? 400
+            : error instanceof ActionRetryConflictError
+              ? 409
             : 500;
       sendJson(response, status, {
         error: error instanceof Error ? error.message : "Internal server error",
