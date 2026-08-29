@@ -1,10 +1,11 @@
 import { bootstrapBlockEditDemo, executeApprovedBlockEdit } from "@ezu/agent";
 import { type ActionState, type AgentEvent } from "@ezu/protocol";
 
-import { chargeUsage, refundUsageCharge } from "./billing/billing-service.js";
+import { chargeUsage, isBillingEnabled, refundUsageCharge } from "./billing/billing-service.js";
 import {
   createDemoBootstrap,
   getDemoSessionDefinition,
+  UnknownSessionDefinitionError,
   type DemoSessionDefinition,
 } from "./demo.js";
 import { buildChoiceResolutionEvent, buildInputResolutionEvent } from "./interaction.js";
@@ -54,10 +55,12 @@ export class SessionNotFoundError extends Error {}
 export class InteractionConflictError extends Error {}
 export class ActionRetryConflictError extends Error {}
 export { InteractionValidationError } from "./interaction.js";
+export { UnknownSessionDefinitionError } from "./demo.js";
 export {
   InsufficientCreditsError,
   MissingIdempotencyKeyError,
   PreviousAttemptFailedError,
+  RefundConflictError,
 } from "./billing/billing-service.js";
 
 let sessionRepository = createMemorySessionRepository();
@@ -221,7 +224,7 @@ export async function applyEdit(
   requestingUserId?: string,
 ): Promise<SessionDto> {
   const record = await ensureSession(sessionId, requestingUserId);
-  const shouldCharge = Boolean(requestingUserId) && input.runAgent !== false;
+  const shouldCharge = isBillingEnabled() && Boolean(requestingUserId) && input.runAgent !== false;
   if (shouldCharge) {
     const charge = await chargeUsage({
       userId: requestingUserId!,
@@ -292,7 +295,7 @@ export async function sendPrompt(
   requestId?: string,
 ): Promise<SessionDto> {
   const record = await ensureSession(sessionId, requestingUserId);
-  const shouldCharge = Boolean(requestingUserId);
+  const shouldCharge = isBillingEnabled() && Boolean(requestingUserId);
   if (shouldCharge) {
     const charge = await chargeUsage({
       userId: requestingUserId!,
@@ -495,6 +498,7 @@ export async function retryAction(
   sessionId: string,
   actionId: string,
   requestingUserId?: string,
+  requestId?: string,
 ): Promise<SessionDto> {
   const record = await ensureSession(sessionId, requestingUserId);
   const current = findActionState(record.events, actionId);
@@ -503,29 +507,56 @@ export async function retryAction(
     throw new ActionRetryConflictError(`Unknown action: ${actionId}`);
   }
 
-  if (current.status === "completed") {
-    throw new ActionRetryConflictError("This action already completed and cannot be retried");
+  const shouldCharge = isBillingEnabled() && Boolean(requestingUserId);
+  if (shouldCharge) {
+    const charge = await chargeUsage({
+      userId: requestingUserId!,
+      kind: "retry",
+      sessionId: record.id,
+      requestId: requestId ?? "",
+    });
+    if (!charge.applied) {
+      // Replayed request (e.g. a client retry): the retry already ran once, so
+      // return the current session state instead of running the agent again.
+      return toDto(record);
+    }
   }
 
-  if (current.status !== "failed") {
-    throw new ActionRetryConflictError(`Action is not in a retryable state: ${current.status}`);
+  try {
+    if (current.status === "completed") {
+      throw new ActionRetryConflictError("This action already completed and cannot be retried");
+    }
+    if (current.status !== "failed") {
+      throw new ActionRetryConflictError(`Action is not in a retryable state: ${current.status}`);
+    }
+
+    const { error: _previousError, ...currentWithoutError } = current;
+    const retryingAction: ActionState = {
+      ...currentWithoutError,
+      status: "pending",
+      updatedAt: new Date().toISOString(),
+    };
+    record.events.push({ type: "action.updated", action: retryingAction });
+
+    const executionEvents = await executeApprovedBlockEdit({
+      sessionId: record.id,
+      projectId: record.bootstrap.projectId,
+      action: retryingAction,
+    });
+    record.events.push(...dropNoisyEvents(executionEvents));
+
+    await sessionRepository.save(record);
+    return toDto(record);
+  } catch (error) {
+    if (shouldCharge) {
+      await refundUsageCharge({
+        userId: requestingUserId!,
+        kind: "retry",
+        sessionId: record.id,
+        requestId: requestId ?? "",
+        reason: "retry failed after charge",
+      });
+    }
+    throw error;
   }
-
-  const { error: _previousError, ...currentWithoutError } = current;
-  const retryingAction: ActionState = {
-    ...currentWithoutError,
-    status: "pending",
-    updatedAt: new Date().toISOString(),
-  };
-  record.events.push({ type: "action.updated", action: retryingAction });
-
-  const executionEvents = await executeApprovedBlockEdit({
-    sessionId: record.id,
-    projectId: record.bootstrap.projectId,
-    action: retryingAction,
-  });
-  record.events.push(...dropNoisyEvents(executionEvents));
-
-  await sessionRepository.save(record);
-  return toDto(record);
 }

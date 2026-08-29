@@ -4,6 +4,11 @@ import { createServer, type Server } from "node:http";
 import { AddressInfo } from "node:net";
 
 import { createApiHandler } from "./router.js";
+import { configureBillingEnabled } from "../domain/billing/billing-service.js";
+
+// These tests exercise retry conflict handling, not billing, so they use the
+// anonymous demo path rather than wiring up a fake auth service.
+configureBillingEnabled(false);
 
 async function withServer(run: (baseUrl: string) => Promise<void>): Promise<void> {
   const handler = createApiHandler();

@@ -93,3 +93,64 @@ test("sqlite-backed billing store enforces idempotent grants and sufficient-bala
   assert.equal(await store.getUsageEventStatus("usage-event:1"), "refunded");
   assert.equal(await store.getUsageEventStatus("no-such-event"), undefined);
 });
+
+test("debitAndRecordUsage debits and records the usage event atomically, and is idempotent", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "ezu-billing-"));
+  const databaseUrl = path.join(directory, "billing.db");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let db;
+  try {
+    db = openDatabase({ databaseUrl, runMigrations: true });
+  } catch (cause) {
+    if (cause instanceof Error && /bindings file/.test(cause.message)) {
+      t.skip("better-sqlite3 native binding is unavailable in this environment");
+      return;
+    }
+    throw cause;
+  }
+
+  const user = createUser(db, { email: "billing-atomic@example.com" });
+  const store = createSqliteBillingStore({ databaseUrl });
+  await store.appendGrant({
+    userId: user.id,
+    amount: 100,
+    reason: "initial free grant",
+    idempotencyKey: `initial-grant:${user.id}`,
+  });
+
+  const charge = await store.debitAndRecordUsage({
+    userId: user.id,
+    credits: 30,
+    debitReason: "usage: prompt",
+    debitIdempotencyKey: "usage:1",
+    usageEvent: { id: "usage-event:atomic-1", userId: user.id, kind: "prompt", units: 1, credits: 30 },
+  });
+  assert.equal(charge.applied, true);
+  assert.equal(charge.balance, 70);
+
+  const page = await store.listUsageEvents(user.id, { limit: 10, offset: 0 });
+  assert.equal(page.events.length, 1);
+  assert.equal(page.events[0]?.id, "usage-event:atomic-1");
+
+  const replay = await store.debitAndRecordUsage({
+    userId: user.id,
+    credits: 30,
+    debitReason: "usage: prompt",
+    debitIdempotencyKey: "usage:1",
+    usageEvent: { id: "usage-event:atomic-1", userId: user.id, kind: "prompt", units: 1, credits: 30 },
+  });
+  assert.equal(replay.applied, false);
+  assert.equal(replay.balance, 70);
+
+  const shortfall = await store.debitAndRecordUsage({
+    userId: user.id,
+    credits: 1000,
+    debitReason: "usage: prompt",
+    debitIdempotencyKey: "usage:2",
+    usageEvent: { id: "usage-event:atomic-2", userId: user.id, kind: "prompt", units: 1, credits: 1000 },
+  });
+  assert.equal(shortfall.applied, false);
+  assert.equal(shortfall.sufficient, false);
+  assert.equal(await store.getUsageEventStatus("usage-event:atomic-2"), undefined);
+  assert.equal(await store.getBalance(user.id), 70);
+});

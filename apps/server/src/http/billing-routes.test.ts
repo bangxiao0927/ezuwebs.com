@@ -76,7 +76,11 @@ test("POST /api/billing/dev-grant is disabled (404) unless BILLING_DEV_GRANTS=tr
   await withServer(createFakeAuthService(USER_A), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/billing/dev-grant`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+      headers: {
+        "content-type": "application/json",
+        cookie: "ezu_session=valid-session",
+        "idempotency-key": "dev-grant-1",
+      },
       body: JSON.stringify({ packageId: "dev-small" }),
     });
     assert.equal(response.status, 404);
@@ -89,10 +93,57 @@ test("POST /api/billing/dev-grant rejects a package id the frontend did not tamp
   await withServer(createFakeAuthService(USER_A), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/billing/dev-grant`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+      headers: {
+        "content-type": "application/json",
+        cookie: "ezu_session=valid-session",
+        "idempotency-key": "dev-grant-1",
+      },
       body: JSON.stringify({ packageId: "unlimited-credits" }),
     });
     assert.equal(response.status, 400);
+  });
+});
+
+test("POST /api/billing/dev-grant requires an Idempotency-Key", async () => {
+  resetBilling();
+  process.env["BILLING_DEV_GRANTS"] = "true";
+  await withServer(createFakeAuthService(USER_A), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/billing/dev-grant`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+      body: JSON.stringify({ packageId: "dev-small" }),
+    });
+    assert.equal(response.status, 400);
+  });
+});
+
+test("POST /api/billing/dev-grant replaying the same Idempotency-Key does not grant twice", async () => {
+  resetBilling();
+  process.env["BILLING_DEV_GRANTS"] = "true";
+  await withServer(createFakeAuthService(USER_A), async (baseUrl) => {
+    const requestHeaders = {
+      "content-type": "application/json",
+      cookie: "ezu_session=valid-session",
+      "idempotency-key": "dev-grant-replay-1",
+    };
+    const requestBody = JSON.stringify({ packageId: "dev-small" });
+
+    const first = await fetch(`${baseUrl}/api/billing/dev-grant`, {
+      method: "POST",
+      headers: requestHeaders,
+      body: requestBody,
+    });
+    const firstBody = (await first.json()) as { balance: number };
+
+    const replay = await fetch(`${baseUrl}/api/billing/dev-grant`, {
+      method: "POST",
+      headers: requestHeaders,
+      body: requestBody,
+    });
+    const replayBody = (await replay.json()) as { balance: number };
+
+    assert.equal(replay.status, 200);
+    assert.equal(replayBody.balance, firstBody.balance);
   });
 });
 
@@ -110,7 +161,11 @@ test("POST /api/billing/dev-grant grants the server-defined amount for a valid p
 
     const response = await fetch(`${baseUrl}/api/billing/dev-grant`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+      headers: {
+        "content-type": "application/json",
+        cookie: "ezu_session=valid-session",
+        "idempotency-key": "dev-grant-1",
+      },
       body: JSON.stringify({ packageId: devGrantPackages[0]!.id }),
     });
     const body = (await response.json()) as { balance: number };
@@ -126,7 +181,11 @@ test("GET /api/billing/summary isolates balances between users", async () => {
   await withServer(createFakeAuthService(USER_A), async (baseUrl) => {
     await fetch(`${baseUrl}/api/billing/dev-grant`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+      headers: {
+        "content-type": "application/json",
+        cookie: "ezu_session=valid-session",
+        "idempotency-key": "dev-grant-1",
+      },
       body: JSON.stringify({ packageId: "dev-small" }),
     });
   });
@@ -147,7 +206,11 @@ test("GET /api/billing/usage respects limit and offset boundaries", async () => 
     for (let i = 0; i < 3; i += 1) {
       await fetch(`${baseUrl}/api/billing/dev-grant`, {
         method: "POST",
-        headers: { "content-type": "application/json", cookie: "ezu_session=valid-session" },
+        headers: {
+          "content-type": "application/json",
+          cookie: "ezu_session=valid-session",
+          "idempotency-key": `dev-grant-${i}`,
+        },
         body: JSON.stringify({ packageId: "dev-small" }),
       });
     }

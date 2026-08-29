@@ -4,6 +4,11 @@ import { createServer, type Server } from "node:http";
 import { AddressInfo } from "node:net";
 
 import { createApiHandler } from "./router.js";
+import { configureBillingEnabled } from "../domain/billing/billing-service.js";
+
+// These tests exercise interaction/approval conflict handling, not billing,
+// so they use the anonymous demo path rather than wiring up a fake auth service.
+configureBillingEnabled(false);
 
 async function withServer(run: (baseUrl: string) => Promise<void>): Promise<void> {
   const handler = createApiHandler();
@@ -96,5 +101,26 @@ test("POST /api/sessions/:id/approval executes the gated action exactly once and
       body: JSON.stringify({ interactionId, decision: "approved" }),
     });
     assert.equal(secondApprove.status, 409);
+  });
+});
+test("POST /api/sessions rejects an unknown definitionId", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ definitionId: "not-a-real-definition" }),
+    });
+    assert.equal(response.status, 400);
+  });
+});
+
+test("POST /api/sessions rejects an oversized request body", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ definitionId: "club-promo", padding: "x".repeat(200_000) }),
+    });
+    assert.equal(response.status, 413);
   });
 });

@@ -2,6 +2,8 @@ import type {
   AppendGrantInput,
   AppendGrantResult,
   BillingStore,
+  DebitAndRecordUsageInput,
+  DebitAndRecordUsageResult,
   DebitInput,
   DebitResult,
   ListUsageEventsResult,
@@ -39,6 +41,23 @@ export function createMemoryBillingStore(): BillingStore {
       .reduce((sum, row) => sum + row.amount, 0);
   }
 
+  function insertUsageRow(input: UsageEventInput): void {
+    if (usage.some((row) => row.id === input.id)) {
+      return;
+    }
+    usage.push({
+      id: input.id,
+      userId: input.userId,
+      kind: input.kind,
+      units: input.units,
+      credits: input.credits,
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      status: input.status ?? "succeeded",
+      createdAt: new Date().toISOString(),
+    });
+  }
+
   return {
     async appendGrant(input: AppendGrantInput): Promise<AppendGrantResult> {
       if (idempotencyKeys.has(input.idempotencyKey)) {
@@ -62,6 +81,20 @@ export function createMemoryBillingStore(): BillingStore {
       return { applied: true, sufficient: true, balance: balance - input.credits };
     },
 
+    async debitAndRecordUsage(input: DebitAndRecordUsageInput): Promise<DebitAndRecordUsageResult> {
+      if (idempotencyKeys.has(input.debitIdempotencyKey)) {
+        return { applied: false, sufficient: true, balance: balanceFor(input.userId) };
+      }
+      const balance = balanceFor(input.userId);
+      if (balance < input.credits) {
+        return { applied: false, sufficient: false, balance };
+      }
+      idempotencyKeys.add(input.debitIdempotencyKey);
+      ledger.push({ userId: input.userId, amount: -input.credits, idempotencyKey: input.debitIdempotencyKey });
+      insertUsageRow(input.usageEvent);
+      return { applied: true, sufficient: true, balance: balance - input.credits };
+    },
+
     async refundDebit(input: RefundDebitInput): Promise<RefundDebitResult> {
       const idempotencyKey = `refund:${input.debitIdempotencyKey}`;
       if (idempotencyKeys.has(idempotencyKey)) {
@@ -77,20 +110,7 @@ export function createMemoryBillingStore(): BillingStore {
     },
 
     async insertUsageEvent(input: UsageEventInput): Promise<void> {
-      if (usage.some((row) => row.id === input.id)) {
-        return;
-      }
-      usage.push({
-        id: input.id,
-        userId: input.userId,
-        kind: input.kind,
-        units: input.units,
-        credits: input.credits,
-        ...(input.model ? { model: input.model } : {}),
-        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-        status: input.status ?? "succeeded",
-        createdAt: new Date().toISOString(),
-      });
+      insertUsageRow(input);
     },
 
     async markUsageEventRefunded(usageEventId: string): Promise<void> {
@@ -104,7 +124,15 @@ export function createMemoryBillingStore(): BillingStore {
       userId: string,
       options: { limit: number; offset: number },
     ): Promise<ListUsageEventsResult> {
-      const owned = usage.filter((row) => row.userId === userId).slice().reverse();
+      const owned = usage
+        .filter((row) => row.userId === userId)
+        .slice()
+        .sort((a, b) => {
+          if (a.createdAt !== b.createdAt) {
+            return a.createdAt < b.createdAt ? 1 : -1;
+          }
+          return a.id < b.id ? 1 : -1;
+        });
       const total = owned.length;
       const totalCreditsConsumed = owned
         .filter((row) => row.status === "succeeded")

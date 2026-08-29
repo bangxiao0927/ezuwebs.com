@@ -5,6 +5,7 @@ import {
   InsufficientCreditsError,
   MissingIdempotencyKeyError,
   PreviousAttemptFailedError,
+  RefundConflictError,
   UnknownDevGrantPackageError,
 } from "./store.js";
 
@@ -13,6 +14,7 @@ export {
   InsufficientCreditsError,
   MissingIdempotencyKeyError,
   PreviousAttemptFailedError,
+  RefundConflictError,
   UnknownDevGrantPackageError,
 };
 
@@ -21,6 +23,7 @@ export const FREE_GRANT_CREDITS = 200;
 export const USAGE_COSTS: Record<string, number> = {
   prompt: 10,
   edit: 5,
+  retry: 5,
 };
 
 /** Fixed, server-defined credit amounts. Never accept a client-supplied amount. */
@@ -112,7 +115,11 @@ export async function listBillingUsage(
   return { events, total, totalCreditsConsumed, limit, offset };
 }
 
-export async function grantDevCredits(userId: string, packageId: string): Promise<BillingSummaryDto> {
+export async function grantDevCredits(
+  userId: string,
+  packageId: string,
+  idempotencyKey: string,
+): Promise<BillingSummaryDto> {
   if (!isDevGrantsEnabled()) {
     throw new DevGrantsDisabledError("Development credit grants are disabled in this environment");
   }
@@ -120,13 +127,16 @@ export async function grantDevCredits(userId: string, packageId: string): Promis
   if (!pkg) {
     throw new UnknownDevGrantPackageError(`Unknown dev grant package: ${packageId}`);
   }
+  if (!idempotencyKey) {
+    throw new MissingIdempotencyKeyError("An Idempotency-Key is required to grant dev credits");
+  }
 
   await ensureFreeGrant(userId);
   await billingStore.appendGrant({
     userId,
     amount: pkg.credits,
     reason: `dev grant: ${pkg.label}`,
-    idempotencyKey: `dev-grant:${userId}:${packageId}:${crypto.randomUUID()}`,
+    idempotencyKey: `dev-grant:${userId}:${packageId}:${idempotencyKey}`,
   });
   const balance = await billingStore.getBalance(userId);
   return { balance, devGrantsEnabled: true, devGrantPackages: DEV_GRANT_PACKAGES };
@@ -175,16 +185,26 @@ export async function chargeUsage(input: ChargeUsageInput): Promise<ChargeUsageR
   await ensureFreeGrant(input.userId);
   const credits = USAGE_COSTS[input.kind] ?? 0;
   const debitIdempotencyKey = debitIdempotencyKeyFor(input);
-  const result = await billingStore.debitIfSufficient({
+  const usageEventId = usageEventIdFor(input);
+  const result = await billingStore.debitAndRecordUsage({
     userId: input.userId,
     credits,
-    reason: `usage: ${input.kind}`,
-    idempotencyKey: debitIdempotencyKey,
+    debitReason: `usage: ${input.kind}`,
+    debitIdempotencyKey,
+    usageEvent: {
+      id: usageEventId,
+      userId: input.userId,
+      kind: input.kind,
+      units: 1,
+      credits,
+      status: "succeeded",
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    },
   });
   if (!result.sufficient) {
     throw new InsufficientCreditsError("Insufficient credits");
   }
-  const usageEventId = usageEventIdFor(input);
   if (!result.applied) {
     const priorStatus = await billingStore.getUsageEventStatus(usageEventId);
     if (priorStatus === "refunded") {
@@ -194,16 +214,6 @@ export async function chargeUsage(input: ChargeUsageInput): Promise<ChargeUsageR
     }
     return { applied: false, usageEventId, balance: result.balance };
   }
-  await billingStore.insertUsageEvent({
-    id: usageEventId,
-    userId: input.userId,
-    kind: input.kind,
-    units: 1,
-    credits,
-    status: "succeeded",
-    ...(input.model ? { model: input.model } : {}),
-    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-  });
   return { applied: true, usageEventId, balance: result.balance };
 }
 
@@ -218,15 +228,27 @@ export interface RefundUsageChargeInput {
 /**
  * Refunds a previously applied chargeUsage debit and marks its usage event
  * refunded. Idempotent: replaying it for the same requestId is a no-op.
+ * Throws RefundConflictError when no matching charge for this requestId was
+ * ever recorded, so a refund can never manufacture new credits.
  */
 export async function refundUsageCharge(input: RefundUsageChargeInput): Promise<void> {
   const credits = USAGE_COSTS[input.kind] ?? 0;
   const debitIdempotencyKey = debitIdempotencyKeyFor(input);
+  const usageEventId = usageEventIdFor(input);
+  const status = await billingStore.getUsageEventStatus(usageEventId);
+  if (status === undefined) {
+    throw new RefundConflictError(
+      "No matching charge exists for this requestId; refusing to credit an unverified refund",
+    );
+  }
+  if (status === "refunded") {
+    return;
+  }
   await billingStore.refundDebit({
     userId: input.userId,
     credits,
     reason: input.reason,
     debitIdempotencyKey,
   });
-  await billingStore.markUsageEventRefunded(usageEventIdFor(input));
+  await billingStore.markUsageEventRefunded(usageEventId);
 }

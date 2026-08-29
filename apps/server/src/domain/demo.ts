@@ -107,6 +107,10 @@ const demoSessions: DemoSessionDefinition[] = [
   },
 ];
 
+export class UnknownSessionDefinitionError extends Error {}
+
+export const DEMO_SESSION_DEFINITION_IDS = ["club-promo", "agency-redesign", "portfolio-dash"] as const;
+
 export function listDemoSessions(): DemoSessionDefinition[] {
   return demoSessions;
 }
@@ -114,7 +118,7 @@ export function listDemoSessions(): DemoSessionDefinition[] {
 export function getDemoSessionDefinition(sessionId: string): DemoSessionDefinition {
   const definition = demoSessions.find((session) => session.id === sessionId);
   if (!definition) {
-    throw new Error(`Unknown session definition: ${sessionId}`);
+    throw new UnknownSessionDefinitionError(`Unknown session definition: ${sessionId}`);
   }
   return definition;
 }
