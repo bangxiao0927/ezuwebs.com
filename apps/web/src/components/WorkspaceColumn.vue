@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 
+import { copyText } from "../lib/clipboard";
 import type { PatchStrategy, WorkbenchViewModel, WorkspaceFile } from "../types";
+import DrawingScratch from "./DrawingScratch.vue";
 
 const props = defineProps<{
   viewModel: WorkbenchViewModel;
@@ -43,6 +45,20 @@ const activeFileContent = computed(() => {
   return file?.content ?? "Select a file to view its contents.";
 });
 
+const clipboardWriter = computed(() => navigator.clipboard);
+
+const utilityStatus = ref<string | undefined>();
+
+async function copyUtility(value: string | undefined, label: string): Promise<void> {
+  const result = await copyText(clipboardWriter.value, value, label);
+  utilityStatus.value = result.message;
+}
+
+function handleScratchPrompt(prompt: string): void {
+  intent.value = prompt;
+  utilityStatus.value = "Scratch sketch prompt filled into the intent editor below.";
+}
+
 const terminalLines = computed(() => {
   const lines: string[] = [];
   lines.push(`session runtime files: ${props.viewModel.files.length}`);
@@ -76,6 +92,47 @@ const terminalLines = computed(() => {
         <li v-if="files.length === 0" class="empty-state">No workspace files loaded.</li>
       </ul>
     </article>
+
+    <article class="card utilities-card">
+      <p class="eyebrow">Utilities</p>
+      <div class="utilities-actions">
+        <button
+          type="button"
+          class="secondary-button"
+          :disabled="!activeFile"
+          @click="copyUtility(activeFile, 'active file path')"
+        >
+          Copy file path
+        </button>
+        <button
+          type="button"
+          class="secondary-button"
+          :disabled="!activeFile"
+          @click="copyUtility(activeFileContent, 'active file content')"
+        >
+          Copy file content
+        </button>
+        <button
+          type="button"
+          class="secondary-button"
+          :disabled="!previewUrl"
+          @click="copyUtility(previewUrl, 'preview URL')"
+        >
+          Copy preview URL
+        </button>
+        <button
+          type="button"
+          class="secondary-button"
+          :disabled="!editor.suggestedPrompt"
+          @click="copyUtility(editor.suggestedPrompt, 'suggested prompt')"
+        >
+          Copy suggested prompt
+        </button>
+      </div>
+      <p class="utilities-status" role="status" aria-live="polite">{{ utilityStatus }}</p>
+    </article>
+
+    <DrawingScratch @generate-prompt="handleScratchPrompt" />
 
     <article class="card editor-card">
       <p class="eyebrow">Block editor</p>
