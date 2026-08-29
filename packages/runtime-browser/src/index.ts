@@ -11,10 +11,8 @@ function escapeHtml(value: string): string {
 }
 
 function createPreviewUrl(html: string): string {
-  if (typeof URL.createObjectURL === "function") {
-    return URL.createObjectURL(new Blob([html], { type: "text/html" }));
-  }
-
+  // This runtime currently executes in the backend process. A blob:nodedata:
+  // URL is scoped to that process and cannot be loaded by the browser SPA.
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
@@ -502,12 +500,6 @@ export class BrowserRuntimeStub implements RuntimeAdapter {
   }
 
   async openPreview(port = 4174): Promise<RuntimePort> {
-    const currentUrl = this.openPorts.get(port);
-
-    if (currentUrl && currentUrl.startsWith("blob:")) {
-      URL.revokeObjectURL(currentUrl);
-    }
-
     const nextUrl = createPreviewUrl(
       renderRuntimePreviewDocument({
         files: [...this.files.entries()]
