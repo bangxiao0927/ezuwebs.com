@@ -117,6 +117,36 @@ test("createOpenAIClient accepts a base URL ending in /v1 and parses a final SSE
   }
 });
 
+test("createOpenAIClient does not duplicate an existing chat completions path", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = "";
+  globalThis.fetch = async (input) => {
+    requestedUrl = String(input);
+    return createStreamingResponse(["data: [DONE]\n"]);
+  };
+
+  try {
+    const client = createOpenAIClient({
+      apiKey: "test-key",
+      baseUrl: "https://example.test/v1/chat/completions/?api-version=latest#ignored",
+    });
+    for await (const _chunk of client.streamChat({
+      model: "test-model",
+      temperature: 0,
+      messages: [{ role: "user", content: "hello" }],
+    })) {
+      // Drain the mocked stream to issue the request.
+    }
+
+    assert.equal(
+      requestedUrl,
+      "https://example.test/v1/chat/completions?api-version=latest",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("createRealModelGateway parses pretty-printed JSON from streamed model output", async () => {
   const originalFetch = globalThis.fetch;
   const structuredOutput = `Planning code such as function demo() { before responding.\n\`\`\`json\n${JSON.stringify(

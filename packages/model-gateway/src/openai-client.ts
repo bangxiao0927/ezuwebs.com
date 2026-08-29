@@ -59,12 +59,27 @@ function parseSseLine(line: string): ParsedSseLine | undefined {
   return undefined;
 }
 
+function resolveChatEndpoint(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  const path = url.pathname.replace(/\/+$/, "");
+
+  if (path.endsWith("/chat/completions")) {
+    url.pathname = path;
+  } else if (path.endsWith("/v1")) {
+    url.pathname = `${path}/chat/completions`;
+  } else {
+    url.pathname = `${path}/v1/chat/completions`;
+  }
+
+  // Fragments are never sent in HTTP requests and usually indicate a typo.
+  url.hash = "";
+  return url.toString();
+}
+
 export function createOpenAIClient(config: OpenAIClientConfig) {
   const { apiKey, baseUrl } = config;
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
-  const chatEndpoint = normalizedBaseUrl.endsWith("/v1")
-    ? `${normalizedBaseUrl}/chat/completions`
-    : `${normalizedBaseUrl}/v1/chat/completions`;
+  const chatEndpoint = resolveChatEndpoint(normalizedBaseUrl);
 
   async function* streamChat(opts: StreamOptions): AsyncIterable<ChatCompletionChunk> {
     // Own controller so we can enforce a timeout and forward an external abort.
