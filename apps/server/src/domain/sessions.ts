@@ -81,13 +81,16 @@ const sessionLocks = new Map<string, Promise<void>>();
 function withSessionLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
   const previous = sessionLocks.get(sessionId) ?? Promise.resolve();
   const settled = previous.then(operation, operation);
-  sessionLocks.set(
-    sessionId,
-    settled.then(
-      () => undefined,
-      () => undefined,
-    ),
+  const release = settled.then(
+    () => undefined,
+    () => undefined,
   );
+  sessionLocks.set(sessionId, release);
+  void release.then(() => {
+    if (sessionLocks.get(sessionId) === release) {
+      sessionLocks.delete(sessionId);
+    }
+  });
   return settled;
 }
 

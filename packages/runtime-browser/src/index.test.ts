@@ -37,6 +37,21 @@ test("file changes refresh an open preview and notify port watchers", async () =
   assert.match(decodePreview(latest.url), /Second revision/);
 });
 
+test("a seeded runtime previews the file most recently changed, not the last sorted path", async () => {
+  const runtime = new BrowserRuntimeStub([
+    { path: "src/App.tsx", content: "old app" },
+    { path: "tsconfig.json", content: "should not be the active preview" },
+  ]);
+
+  await runtime.patchFile("src/App.tsx", "updated app");
+  const preview = await runtime.openPreview(4174);
+  const html = decodePreview(preview.url);
+
+  assert.match(html, /src\/App\.tsx/);
+  assert.match(html, /updated app/);
+  assert.doesNotMatch(html, /<h1>tsconfig\.json<\/h1>/);
+});
+
 test("seeded files are readable and listed without any writes", async () => {
   const runtime = new BrowserRuntimeStub([
     { path: "src/App.tsx", content: "export const App = 1;" },
