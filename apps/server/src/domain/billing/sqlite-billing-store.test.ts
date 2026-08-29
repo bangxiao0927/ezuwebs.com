@@ -1,12 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import { createUser, openDatabase } from "@ezu/db";
 
 import { createSqliteBillingStore } from "./sqlite-billing-store.js";
 
 test("sqlite-backed billing store enforces idempotent grants and sufficient-balance debits", async (t) => {
-  const databaseUrl = ":memory:";
+  const directory = await mkdtemp(path.join(tmpdir(), "ezu-billing-"));
+  const databaseUrl = path.join(directory, "billing.db");
+  t.after(() => rm(directory, { recursive: true, force: true }));
   let db;
   try {
     db = openDatabase({ databaseUrl, runMigrations: true });
