@@ -53,12 +53,17 @@ export async function buildTestWorker(overrides: Partial<WorkerConfig> = {}): Pr
       commandMaxOutputBytes: 1024 * 1024,
       commandMaxTimeoutMs: 60_000,
       runtimeTtlMs: 60 * 60 * 1000,
+      runtimeCreateTimeoutMs: 60_000,
+      dockerOperationTimeoutMs: 30_000,
     },
     ...overrides,
   };
 
   const engine = new FakeDockerEngine();
-  const registry = new RuntimeRegistry(path.join(dir, "registry.json"), { maxRuntimes: config.limits.maxRuntimes });
+  const registry = new RuntimeRegistry(path.join(dir, "registry.json"), {
+    maxRuntimes: config.limits.maxRuntimes,
+    createTimeoutMs: config.limits.runtimeCreateTimeoutMs,
+  });
   await registry.load();
   const workspace = new WorkspaceService(engine, {
     maxFileBytes: config.limits.workspaceMaxFileBytes,

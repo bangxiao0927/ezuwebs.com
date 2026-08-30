@@ -16,6 +16,13 @@ export interface RuntimeRecord {
   containerId?: string;
   createdAt: string;
   expiresAt?: string;
+  /**
+   * Set only while `status` is "creating". Past this instant, a `creating`
+   * record is stuck: either its owning process crashed/restarted before
+   * finishing, or a docker operation hung well past its own timeout. Ignored
+   * once `status` moves away from "creating".
+   */
+  createDeadlineAt?: string;
 }
 
 export interface CreateRuntimeInput {
@@ -29,7 +36,10 @@ const activeStatuses: RuntimeStatus[] = ["creating", "ready", "stopping"];
 
 export interface RuntimeRegistryOptions {
   maxRuntimes?: number;
+  createTimeoutMs?: number;
 }
+
+const defaultCreateTimeoutMs = 60_000;
 
 /**
  * Persists runtime metadata as one JSON file, written atomically (temp file
@@ -45,12 +55,14 @@ export class RuntimeRegistry {
   private loaded = false;
   private writeQueue: Promise<void> = Promise.resolve();
   private readonly maxRuntimes: number;
+  private readonly createTimeoutMs: number;
 
   constructor(
     private readonly filePath: string,
     options: RuntimeRegistryOptions = {},
   ) {
     this.maxRuntimes = options.maxRuntimes ?? Number.POSITIVE_INFINITY;
+    this.createTimeoutMs = options.createTimeoutMs ?? defaultCreateTimeoutMs;
   }
 
   async load(): Promise<void> {
@@ -113,6 +125,7 @@ export class RuntimeRegistry {
       profile: input.profile,
       status: "creating",
       createdAt: new Date().toISOString(),
+      createDeadlineAt: new Date(Date.now() + this.createTimeoutMs).toISOString(),
     };
     this.records.set(record.runtimeId, record);
     await this.persist();

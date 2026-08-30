@@ -96,3 +96,29 @@ test("create() allows a new runtime again once a failed one frees capacity", asy
   const second = await registry.create({ sessionId: "s2", projectId: "p1", image: "img", profile: "default" });
   assert.notEqual(second.runtimeId, first.runtimeId);
 });
+
+test("create() sets a createDeadlineAt in the future based on the configured create timeout", async () => {
+  const filePath = await newRegistryFile();
+  const registry = new RuntimeRegistry(filePath, { createTimeoutMs: 5_000 });
+  await registry.load();
+
+  const before = Date.now();
+  const record = await registry.create({ sessionId: "s1", projectId: "p1", image: "img", profile: "default" });
+
+  assert.ok(record.createDeadlineAt);
+  const deadline = new Date(record.createDeadlineAt!).getTime();
+  assert.ok(deadline >= before + 5_000);
+  assert.ok(deadline <= Date.now() + 5_000);
+});
+
+test("create() defaults createTimeoutMs to 60s when not configured", async () => {
+  const filePath = await newRegistryFile();
+  const registry = new RuntimeRegistry(filePath);
+  await registry.load();
+
+  const before = Date.now();
+  const record = await registry.create({ sessionId: "s1", projectId: "p1", image: "img", profile: "default" });
+
+  const deadline = new Date(record.createDeadlineAt!).getTime();
+  assert.ok(deadline >= before + 60_000);
+});

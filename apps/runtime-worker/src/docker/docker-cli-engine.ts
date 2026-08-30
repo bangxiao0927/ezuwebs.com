@@ -23,7 +23,12 @@ export interface DockerCliEngineOptions {
   dockerBin: string;
   /** Scratch directory for staging files copied via `docker cp`; each transfer gets its own 0600 temp file, deleted immediately after use. */
   scratchRoot: string;
+  /** Every docker CLI invocation this engine makes is killed and rejects with `DockerOperationTimeoutError` if it runs longer than this. */
+  operationTimeoutMs: number;
 }
+
+/** Thrown when a docker CLI invocation is killed for exceeding `operationTimeoutMs`. The container it was creating, if any, may still exist with an ID this engine never learned; orphan reconciliation cleans that up later. */
+export class DockerOperationTimeoutError extends Error {}
 
 /**
  * Production DockerEngine. Every docker invocation is `spawn(dockerBin,
@@ -39,10 +44,23 @@ export class DockerCliEngine implements DockerEngine {
       const child = spawn(this.options.dockerBin, args, { shell: false });
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, this.options.operationTimeoutMs);
       child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
       child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-      child.on("error", reject);
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
       child.on("close", (exitCode) => {
+        clearTimeout(timer);
+        if (timedOut) {
+          reject(new DockerOperationTimeoutError(`docker ${args[0] ?? ""} timed out after ${this.options.operationTimeoutMs}ms`));
+          return;
+        }
         resolve({ stdout: Buffer.concat(stdoutChunks), stderr: Buffer.concat(stderrChunks), exitCode: exitCode ?? -1 });
       });
       if (input) {

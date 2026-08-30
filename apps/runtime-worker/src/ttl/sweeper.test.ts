@@ -88,3 +88,49 @@ test("reconcileOrphans() marking a runtime failed also revokes its preview token
 
   assert.equal(runtimeService.resolvePreview(preview.token), undefined);
 });
+
+test("sweepExpired() marks a stuck creating runtime failed once its createDeadlineAt has passed, freeing capacity", async () => {
+  const { runtimeService, registry } = await buildTestRuntimeService({ maxRuntimes: 1 });
+  await registry.create({ sessionId: "s1", projectId: "p1", image: "img", profile: "default" });
+  const stuck = registry.list()[0]!;
+  await registry.update(stuck.runtimeId, { createDeadlineAt: new Date(Date.now() - 1000).toISOString() });
+
+  const sweeper = new RuntimeSweeper(runtimeService);
+  await sweeper.sweepExpired();
+
+  assert.equal(registry.get(stuck.runtimeId)?.status, "failed");
+
+  const created = await runtimeService.createRuntime({
+    sessionId: "s2",
+    projectId: "p1",
+    image: "ezu/sandbox:frontend",
+    profile: "default",
+  });
+  assert.equal(created.status, "ready");
+});
+
+test("sweepExpired() leaves a creating runtime with a future createDeadlineAt untouched", async () => {
+  const { runtimeService, registry } = await buildTestRuntimeService();
+  await registry.create({ sessionId: "s1", projectId: "p1", image: "img", profile: "default" });
+  const record = registry.list()[0]!;
+
+  const sweeper = new RuntimeSweeper(runtimeService);
+  await sweeper.sweepExpired();
+
+  assert.equal(registry.get(record.runtimeId)?.status, "creating");
+});
+
+test("reconcileStaleCreating() marks every creating record failed, whether or not it has a containerId", async () => {
+  const { runtimeService, registry } = await buildTestRuntimeService();
+  await registry.create({ sessionId: "s1", projectId: "p1", image: "img", profile: "default" });
+  const withoutContainer = registry.list()[0]!;
+  await registry.create({ sessionId: "s2", projectId: "p1", image: "img", profile: "default" });
+  const withContainerRecord = registry.list().find((record) => record.sessionId === "s2")!;
+  await registry.update(withContainerRecord.runtimeId, { containerId: "some-container" });
+
+  const sweeper = new RuntimeSweeper(runtimeService);
+  await sweeper.reconcileStaleCreating();
+
+  assert.equal(registry.get(withoutContainer.runtimeId)?.status, "failed");
+  assert.equal(registry.get(withContainerRecord.runtimeId)?.status, "failed");
+});

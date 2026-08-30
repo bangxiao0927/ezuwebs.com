@@ -11,6 +11,8 @@ export interface WorkerLimitsConfig {
   commandMaxOutputBytes: number;
   commandMaxTimeoutMs: number;
   runtimeTtlMs: number;
+  runtimeCreateTimeoutMs: number;
+  dockerOperationTimeoutMs: number;
 }
 
 export interface WorkerConfig {
@@ -41,6 +43,8 @@ const defaultLimits: WorkerLimitsConfig = {
   commandMaxOutputBytes: 5 * 1024 * 1024,
   commandMaxTimeoutMs: 10 * 60 * 1000,
   runtimeTtlMs: 60 * 60 * 1000,
+  runtimeCreateTimeoutMs: 60 * 1000,
+  dockerOperationTimeoutMs: 30 * 1000,
 };
 
 function isLoopbackHost(hostname: string): boolean {
@@ -157,6 +161,16 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
         defaultLimits.commandMaxTimeoutMs,
       ),
       runtimeTtlMs: parsePositiveIntEnv(env, "WORKER_LIMIT_RUNTIME_TTL_MS", defaultLimits.runtimeTtlMs),
+      runtimeCreateTimeoutMs: parsePositiveIntEnv(
+        env,
+        "WORKER_RUNTIME_CREATE_TIMEOUT_MS",
+        defaultLimits.runtimeCreateTimeoutMs,
+      ),
+      dockerOperationTimeoutMs: parsePositiveIntEnv(
+        env,
+        "WORKER_DOCKER_OPERATION_TIMEOUT_MS",
+        defaultLimits.dockerOperationTimeoutMs,
+      ),
     },
   };
 }

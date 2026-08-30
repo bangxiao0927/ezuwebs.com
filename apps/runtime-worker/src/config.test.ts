@@ -50,3 +50,24 @@ test("loadWorkerConfig lets WORKER_REQUIRE_ROOTLESS be disabled only explicitly"
   const config = loadWorkerConfig(baseEnv({ WORKER_REQUIRE_ROOTLESS: "false" }));
   assert.equal(config.requireRootless, false);
 });
+
+test("loadWorkerConfig defaults the runtime create and docker operation timeouts", () => {
+  const config = loadWorkerConfig(baseEnv());
+
+  assert.equal(config.limits.runtimeCreateTimeoutMs, 60_000);
+  assert.equal(config.limits.dockerOperationTimeoutMs, 30_000);
+});
+
+test("loadWorkerConfig rejects a non-positive WORKER_RUNTIME_CREATE_TIMEOUT_MS", () => {
+  assert.throws(
+    () => loadWorkerConfig(baseEnv({ WORKER_RUNTIME_CREATE_TIMEOUT_MS: "0" })),
+    WorkerConfigError,
+  );
+});
+
+test("loadWorkerConfig rejects a non-positive WORKER_DOCKER_OPERATION_TIMEOUT_MS", () => {
+  assert.throws(
+    () => loadWorkerConfig(baseEnv({ WORKER_DOCKER_OPERATION_TIMEOUT_MS: "not-a-number" })),
+    WorkerConfigError,
+  );
+});

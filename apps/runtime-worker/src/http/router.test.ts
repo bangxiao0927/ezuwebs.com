@@ -200,6 +200,8 @@ const defaultTestLimits = {
   commandMaxOutputBytes: 1024 * 1024,
   commandMaxTimeoutMs: 60_000,
   runtimeTtlMs: 60 * 60 * 1000,
+  runtimeCreateTimeoutMs: 60_000,
+  dockerOperationTimeoutMs: 30_000,
 };
 
 test("a NaN or oversized timeoutMs is rejected or clamped rather than trusted as-is", async () => {

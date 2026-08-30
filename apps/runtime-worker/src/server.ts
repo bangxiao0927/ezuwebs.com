@@ -33,6 +33,7 @@ export async function startRuntimeWorker(config: WorkerConfig, engine: DockerEng
 
   const registry = new RuntimeRegistry(path.join(config.root, "registry.json"), {
     maxRuntimes: config.limits.maxRuntimes,
+    createTimeoutMs: config.limits.runtimeCreateTimeoutMs,
   });
   await registry.load();
   const workspace = new WorkspaceService(engine, {
@@ -58,6 +59,7 @@ export async function startRuntimeWorker(config: WorkerConfig, engine: DockerEng
   });
 
   const sweeper = new RuntimeSweeper(runtimeService);
+  await sweeper.reconcileStaleCreating();
   await sweeper.reconcileOrphans();
 
   const handler = createRuntimeWorkerHandler(config, runtimeService);

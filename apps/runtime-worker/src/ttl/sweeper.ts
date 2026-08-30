@@ -15,6 +15,12 @@ export class RuntimeSweeper {
 
   async sweepExpired(now: number = Date.now()): Promise<void> {
     for (const record of this.runtimeService.listRuntimes()) {
+      if (record.status === "creating") {
+        if (record.createDeadlineAt && new Date(record.createDeadlineAt).getTime() <= now) {
+          await this.runtimeService.markRuntimeFailed(record.runtimeId);
+        }
+        continue;
+      }
       if (!record.expiresAt || !activeStatuses.has(record.status)) {
         continue;
       }
@@ -22,6 +28,22 @@ export class RuntimeSweeper {
         continue;
       }
       await this.runtimeService.deleteRuntime(record.runtimeId);
+    }
+  }
+
+  /**
+   * Runs once at worker startup, before any request is served. A "creating"
+   * record found here cannot belong to an in-flight `createRuntime()` call
+   * in this process (this process just started), so it was left behind by a
+   * crash or restart. Marks each one failed so its session can retry and its
+   * capacity slot is freed; container removal, if it had one, is best-effort
+   * inside `markRuntimeFailed`.
+   */
+  async reconcileStaleCreating(): Promise<void> {
+    for (const record of this.runtimeService.listRuntimes()) {
+      if (record.status === "creating") {
+        await this.runtimeService.markRuntimeFailed(record.runtimeId);
+      }
     }
   }
 

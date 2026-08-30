@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { FakeDockerEngine } from "./docker/test-support/fake-docker-engine.js";
+import { RuntimeRegistry } from "./registry/runtime-registry.js";
 import { startRuntimeWorker } from "./server.js";
 import type { WorkerConfig } from "./config.js";
 
@@ -31,6 +32,8 @@ async function testConfig(overrides: Partial<WorkerConfig> = {}): Promise<Worker
       commandMaxOutputBytes: 1024,
       commandMaxTimeoutMs: 5000,
       runtimeTtlMs: 60_000,
+      runtimeCreateTimeoutMs: 60_000,
+      dockerOperationTimeoutMs: 30_000,
     },
     ...overrides,
   };
@@ -59,4 +62,35 @@ test("shutdown() cancels running commands and disposes runtimes when configured 
   await worker.shutdown({ disposeAllRuntimes: true });
 
   assert.throws(() => worker.runtimeService.requireRuntime(created.runtimeId));
+});
+
+test("startRuntimeWorker fails a 'creating' record left behind by a crashed process, freeing its session for retry", async () => {
+  const base = await testConfig();
+  const config: WorkerConfig = { ...base, limits: { ...base.limits, maxRuntimes: 1 } };
+
+  const priorProcessRegistry = new RuntimeRegistry(path.join(config.root, "registry.json"), {
+    maxRuntimes: config.limits.maxRuntimes,
+  });
+  await priorProcessRegistry.load();
+  const stuck = await priorProcessRegistry.create({
+    sessionId: "s1",
+    projectId: "p1",
+    image: "img",
+    profile: "default",
+  });
+
+  const engine = new FakeDockerEngine();
+  const worker = await startRuntimeWorker(config, engine);
+
+  assert.equal(worker.runtimeService.requireRuntime(stuck.runtimeId).status, "failed");
+
+  const retried = await worker.runtimeService.createRuntime({
+    sessionId: "s1",
+    projectId: "p1",
+    image: "img",
+    profile: "default",
+  });
+  assert.equal(retried.status, "ready");
+
+  await worker.shutdown({ disposeAllRuntimes: true });
 });

@@ -234,6 +234,13 @@ export class RuntimeService {
   /** Marks a runtime failed and drops its in-memory state, without removing it from the registry (unlike deleteRuntime). */
   async markRuntimeFailed(runtimeId: string): Promise<void> {
     const record = this.requireRuntime(runtimeId);
+    if (record.containerId) {
+      try {
+        await this.engine.removeContainer(record.containerId, true);
+      } catch {
+        // Best-effort: the registry status change below is what makes this runtime retryable.
+      }
+    }
     await this.cleanupRuntimeState(runtimeId, record.containerId);
     await this.registry.setStatus(runtimeId, "failed");
   }

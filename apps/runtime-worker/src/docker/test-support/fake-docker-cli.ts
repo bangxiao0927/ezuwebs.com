@@ -18,6 +18,8 @@ export interface FakeDockerResponse {
   symlinkDestTo?: string;
   /** Writes this content to the last argv entry (the `docker cp` destination). */
   writeDestContent?: string;
+  /** Never exits on its own: simulates a hung docker CLI invocation that only a caller's kill() can stop. */
+  hang?: boolean;
 }
 
 export interface FakeDockerConfig {
@@ -79,7 +81,18 @@ if (chosen.stdout) {
 if (chosen.stderr) {
   process.stderr.write(chosen.stderr);
 }
-process.exit(chosen.exitCode ?? 0);
+if (chosen.hang) {
+  // Busy-loops synchronously inside this --require preload, so control never
+  // returns to Node's normal script loading (which would otherwise try to
+  // load argv[0], e.g. "create", as a missing entry script and exit on its
+  // own). Only an external kill() of this process can end it, matching a
+  // truly hung docker CLI invocation.
+  while (true) {
+    // intentionally empty
+  }
+} else {
+  process.exit(chosen.exitCode ?? 0);
+}
 `;
 
 export async function createFakeDockerCli(): Promise<FakeDockerCli> {

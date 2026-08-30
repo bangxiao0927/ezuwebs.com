@@ -10,7 +10,11 @@ await mkdir(config.root, { recursive: true });
 const scratchRoot = path.join(config.root, "scratch");
 await mkdir(scratchRoot, { recursive: true, mode: 0o700 });
 
-const engine = new DockerCliEngine({ dockerBin: config.dockerBin, scratchRoot });
+const engine = new DockerCliEngine({
+  dockerBin: config.dockerBin,
+  scratchRoot,
+  operationTimeoutMs: config.limits.dockerOperationTimeoutMs,
+});
 
 const worker = await startRuntimeWorker(config, engine);
 // eslint-disable-next-line no-console

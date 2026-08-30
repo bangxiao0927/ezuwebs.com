@@ -22,7 +22,11 @@ test("listManagedContainers() requests --no-trunc and returns the full, unabbrev
       },
     ],
   });
-  const engine = new DockerCliEngine({ dockerBin: fakeCli.dockerBin, scratchRoot: await newScratchRoot() });
+  const engine = new DockerCliEngine({
+    dockerBin: fakeCli.dockerBin,
+    scratchRoot: await newScratchRoot(),
+    operationTimeoutMs: 5_000,
+  });
 
   const containers = await engine.listManagedContainers();
 
@@ -43,7 +47,7 @@ test("readFile() rejects a container-supplied symlink instead of following it of
   await fakeCli.setConfig({
     responses: [{ argv: ["cp", "-L"], exitCode: 0, symlinkDestTo: secretPath }],
   });
-  const engine = new DockerCliEngine({ dockerBin: fakeCli.dockerBin, scratchRoot });
+  const engine = new DockerCliEngine({ dockerBin: fakeCli.dockerBin, scratchRoot, operationTimeoutMs: 5_000 });
 
   await assert.rejects(() => engine.readFile("container1", "escape.txt"));
 
@@ -57,7 +61,7 @@ test("readFile() returns the file's content when docker cp writes a plain regula
   await fakeCli.setConfig({
     responses: [{ argv: ["cp", "-L"], exitCode: 0, writeDestContent: "hello from the container" }],
   });
-  const engine = new DockerCliEngine({ dockerBin: fakeCli.dockerBin, scratchRoot });
+  const engine = new DockerCliEngine({ dockerBin: fakeCli.dockerBin, scratchRoot, operationTimeoutMs: 5_000 });
 
   const content = await engine.readFile("container1", "index.html");
 
@@ -66,11 +70,41 @@ test("readFile() returns the file's content when docker cp writes a plain regula
 
 test("terminateContainer() stops then force-removes the container, never just the docker CLI client", async () => {
   const fakeCli = await createFakeDockerCli();
-  const engine = new DockerCliEngine({ dockerBin: fakeCli.dockerBin, scratchRoot: await newScratchRoot() });
+  const engine = new DockerCliEngine({
+    dockerBin: fakeCli.dockerBin,
+    scratchRoot: await newScratchRoot(),
+    operationTimeoutMs: 5_000,
+  });
 
   await engine.terminateContainer("container1");
 
   const invocations = await fakeCli.readInvocations();
   assert.deepEqual(invocations[0], ["stop", "--time", "2", "container1"]);
   assert.deepEqual(invocations[1], ["rm", "--force", "container1"]);
+});
+
+test("a hung docker CLI invocation is killed and rejects once it exceeds the configured operation timeout", async () => {
+  const fakeCli = await createFakeDockerCli();
+  await fakeCli.setConfig({
+    responses: [{ argv: ["create"], hang: true }],
+  });
+  const engine = new DockerCliEngine({
+    dockerBin: fakeCli.dockerBin,
+    scratchRoot: await newScratchRoot(),
+    operationTimeoutMs: 100,
+  });
+
+  const start = Date.now();
+  await assert.rejects(() =>
+    engine.createContainer({
+      runtimeId: "rt_1",
+      image: "img",
+      labels: {},
+      memoryBytes: 1,
+      cpus: 1,
+      pidsLimit: 1,
+      workspaceExec: false,
+    }),
+  );
+  assert.ok(Date.now() - start < 5_000);
 });
