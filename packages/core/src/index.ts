@@ -38,6 +38,8 @@ export interface RuntimeAdapter {
   watchPorts(
     cb: (event: { port: number; url: string; status: "open" | "close" }) => void,
   ): Promise<() => void>;
+  /** Releases any external resources (e.g. a remote sandbox) backing this runtime. Optional: in-process runtimes have nothing to release. */
+  dispose?(): Promise<void>;
 }
 
 export interface SessionStore {

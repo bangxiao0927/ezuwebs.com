@@ -9,7 +9,7 @@ export interface SessionRuntimeManagerOptions {
   /** Injectable clock, so idle-eviction tests can control elapsed time without real timers. */
   now?: () => number;
   /** Injectable runtime factory, defaults to the in-process browser runtime stub. */
-  createRuntime?: (seedFiles: WorkspaceFileEntry[]) => RuntimeAdapter;
+  createRuntime?: (sessionId: string, seedFiles: WorkspaceFileEntry[], projectId: string | undefined) => RuntimeAdapter;
 }
 
 export interface SessionRuntimeManager {
@@ -25,6 +25,7 @@ export interface SessionRuntimeManager {
     sessionId: string,
     seedFiles: WorkspaceFileEntry[],
     operation: (runtime: RuntimeAdapter) => Promise<T>,
+    options?: { projectId?: string },
   ): Promise<{ result: T; workspaceFiles: WorkspaceFileEntry[] }>;
   /** Drops every session whose runtime has been idle past the configured TTL. Busy sessions are left untouched. */
   evictIdle(): void;
@@ -53,23 +54,38 @@ export function createSessionRuntimeManager(
 ): SessionRuntimeManager {
   const idleTtlMs = options.idleTtlMs ?? defaultIdleTtlMs;
   const now = options.now ?? (() => Date.now());
-  const createRuntime = options.createRuntime ?? ((seedFiles) => createBrowserRuntimeStub(seedFiles));
+  const createRuntime = options.createRuntime ?? ((_sessionId, seedFiles) => createBrowserRuntimeStub(seedFiles));
   const entries = new Map<string, RuntimeEntry>();
 
-  function getOrCreateEntry(sessionId: string, seedFiles: WorkspaceFileEntry[]): RuntimeEntry {
+  function getOrCreateEntry(
+    sessionId: string,
+    seedFiles: WorkspaceFileEntry[],
+    projectId: string | undefined,
+  ): RuntimeEntry {
     const existing = entries.get(sessionId);
     if (existing) {
       return existing;
     }
 
     const entry: RuntimeEntry = {
-      runtime: createRuntime(seedFiles),
+      runtime: createRuntime(sessionId, seedFiles, projectId),
       lastUsedAt: now(),
       pendingCount: 0,
       queue: Promise.resolve(),
     };
     entries.set(sessionId, entry);
     return entry;
+  }
+
+  async function disposeRuntime(runtime: RuntimeAdapter): Promise<void> {
+    try {
+      await runtime.dispose?.();
+    } catch (error) {
+      // A runtime failing to release its external resources must not block
+      // the session slot from being freed for a fresh runtime.
+      // eslint-disable-next-line no-console
+      console.error("[ezu/server] Failed to dispose a session runtime:", error);
+    }
   }
 
   async function dispose(sessionId: string): Promise<void> {
@@ -82,12 +98,13 @@ export function createSessionRuntimeManager(
     await entry.queue;
     if (entries.get(sessionId) === entry) {
       entries.delete(sessionId);
+      await disposeRuntime(entry.runtime);
     }
   }
 
   return {
-    async withRuntime(sessionId, seedFiles, operation) {
-      const entry = getOrCreateEntry(sessionId, seedFiles);
+    async withRuntime(sessionId, seedFiles, operation, options) {
+      const entry = getOrCreateEntry(sessionId, seedFiles, options?.projectId);
       entry.pendingCount += 1;
 
       let result!: { result: unknown; workspaceFiles: WorkspaceFileEntry[] };
@@ -114,6 +131,7 @@ export function createSessionRuntimeManager(
       for (const [sessionId, entry] of entries) {
         if (entry.pendingCount === 0 && now() - entry.lastUsedAt >= idleTtlMs) {
           entries.delete(sessionId);
+          void disposeRuntime(entry.runtime);
         }
       }
     },
