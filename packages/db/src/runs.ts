@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, max } from "drizzle-orm";
+import { and, asc, desc, eq, gt, max } from "drizzle-orm";
 
 import type { EzuDb } from "./client.js";
 import { agentRuns, runEvents, type AgentRunRow, type RunEventRow } from "./schema.js";
@@ -54,6 +54,16 @@ export function getRunRow(db: EzuDb, id: string): AgentRunRow | undefined {
 
 export function listRunsByStatus(db: EzuDb, status: RunStatus): AgentRunRow[] {
   return db.select().from(agentRuns).where(eq(agentRuns.status, status)).all();
+}
+
+/** All runs recorded for a session, newest first. */
+export function listRunsBySession(db: EzuDb, sessionId: string): AgentRunRow[] {
+  return db
+    .select()
+    .from(agentRuns)
+    .where(eq(agentRuns.sessionId, sessionId))
+    .orderBy(desc(agentRuns.createdAt))
+    .all();
 }
 
 export interface UpdateRunRowPatch {

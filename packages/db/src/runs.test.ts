@@ -12,6 +12,7 @@ import {
   getMaxRunEventSeq,
   getRunRow,
   listRunEventRowsAfter,
+  listRunsBySession,
   updateRunRow,
   RunAlreadyExistsError,
   RunRowNotFoundError,
@@ -168,4 +169,24 @@ test("updateRunRow throws RunRowNotFoundError for an unknown run", async (t) => 
   }
 
   assert.throws(() => updateRunRow(db, "missing", 1, { status: "running" }), RunRowNotFoundError);
+});
+
+test("listRunsBySession returns only that session's runs, newest first", async (t) => {
+  const db = await openTempDatabase(t);
+  if (!db) {
+    t.skip("better-sqlite3 native binding is unavailable in this environment");
+    return;
+  }
+  seedSession(db, "session-1");
+  seedSession(db, "session-2");
+  createRunRow(db, { id: "run-1", sessionId: "session-1", kind: "prompt", inputJson: "{}" });
+  createRunRow(db, { id: "run-2", sessionId: "session-1", kind: "prompt", inputJson: "{}" });
+  createRunRow(db, { id: "run-3", sessionId: "session-2", kind: "prompt", inputJson: "{}" });
+
+  const runs = listRunsBySession(db, "session-1");
+
+  assert.deepEqual(
+    runs.map((run) => run.id).sort(),
+    ["run-1", "run-2"],
+  );
 });

@@ -169,6 +169,26 @@ export async function getRun(sessionId: string, runId: string, requestingUserId?
   return toRunDto(run, await lastEventSeqFor(runId));
 }
 
+/**
+ * Runs for a session that have not reached a terminal status yet, newest
+ * first. Used by the frontend to recover a run it was streaming before a
+ * page reload or reconnect, without needing a client-side cursor.
+ */
+export async function listActiveRuns(sessionId: string, requestingUserId?: string): Promise<RunDto[]> {
+  await getSession(sessionId, requestingUserId);
+  const runs = await runRepository.listRunsForSession(sessionId);
+  const active = runs.filter(
+    (run) =>
+      !RUN_TERMINAL_STATUSES.has(run.status) &&
+      (!run.userId || run.userId === requestingUserId),
+  );
+  const dtos: RunDto[] = [];
+  for (const run of active) {
+    dtos.push(toRunDto(run, await lastEventSeqFor(run.id)));
+  }
+  return dtos;
+}
+
 export interface RunEventDto {
   seq: number;
   event: AgentEvent;

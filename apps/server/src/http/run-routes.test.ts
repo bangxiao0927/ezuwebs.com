@@ -177,7 +177,36 @@ test("GET /api/sessions/:id/runs/:runId/events replays persisted events and stre
   });
 });
 
-test("GET /api/sessions/:id/runs/:runId rejects afterSeq that is not a non-negative integer", async () => {
+test("GET /api/sessions/:id/runs/:runId/events accepts afterSeq=-1 to stream from the start", async () => {
+  resetDomainState();
+  configureModelGatewayFactory(() =>
+    fakeGatewayEmitting([{ type: "message.delta", messageId: "m1", text: "hi" }]),
+  );
+
+  await withServer(createFakeAuthService(USER_A), async (baseUrl) => {
+    const sessionId = await createOwnedSession(baseUrl);
+    const created = await fetch(`${baseUrl}/api/sessions/${sessionId}/runs`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: "ezu_session=valid-session",
+        "idempotency-key": "req-1",
+      },
+      body: JSON.stringify({ kind: "prompt", text: "Do the thing" }),
+    });
+    const { run } = (await created.json()) as { run: { id: string } };
+
+    const response = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/runs/${run.id}/events?afterSeq=-1`,
+      { headers: { cookie: "ezu_session=valid-session" } },
+    );
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /event: agent/);
+  });
+});
+
+test("GET /api/sessions/:id/runs/:runId rejects afterSeq below -1", async () => {
   resetDomainState();
   configureModelGatewayFactory(() => fakeGatewayEmitting([]));
 
@@ -195,7 +224,7 @@ test("GET /api/sessions/:id/runs/:runId rejects afterSeq that is not a non-negat
     const { run } = (await created.json()) as { run: { id: string } };
 
     const response = await fetch(
-      `${baseUrl}/api/sessions/${sessionId}/runs/${run.id}/events?afterSeq=-1`,
+      `${baseUrl}/api/sessions/${sessionId}/runs/${run.id}/events?afterSeq=-2`,
       { headers: { cookie: "ezu_session=valid-session" } },
     );
     assert.equal(response.status, 400);
@@ -353,5 +382,73 @@ test("GET /api/sessions/:id/runs/:runId/events stops polling once the client dis
     });
     const body = (await response.json()) as { run: { status: string } };
     assert.equal(body.run.status, "running");
+  });
+});
+
+test("GET /api/sessions/:id/runs?active=true lists a run still in flight and omits terminal ones", async () => {
+  resetDomainState();
+  configureModelGatewayFactory(() =>
+    fakeGatewayEmitting([{ type: "message.delta", messageId: "m1", text: "still going" }], { hang: true }),
+  );
+
+  await withServer(createFakeAuthService(USER_A), async (baseUrl) => {
+    const sessionId = await createOwnedSession(baseUrl);
+    const created = await fetch(`${baseUrl}/api/sessions/${sessionId}/runs`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: "ezu_session=valid-session",
+        "idempotency-key": "req-1",
+      },
+      body: JSON.stringify({ kind: "prompt", text: "hi" }),
+    });
+    const { run } = (await created.json()) as { run: { id: string } };
+
+    await waitFor(async () => {
+      const listResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/runs?active=true`, {
+        headers: { cookie: "ezu_session=valid-session" },
+      });
+      const listBody = (await listResponse.json()) as { runs: Array<{ id: string; status: string }> };
+      return listBody.runs.some((entry) => entry.id === run.id && entry.status === "running");
+    });
+
+    await fetch(`${baseUrl}/api/sessions/${sessionId}/runs/${run.id}/cancel`, {
+      method: "POST",
+      headers: { cookie: "ezu_session=valid-session" },
+    });
+
+    await waitFor(async () => {
+      const listResponse = await fetch(`${baseUrl}/api/sessions/${sessionId}/runs?active=true`, {
+        headers: { cookie: "ezu_session=valid-session" },
+      });
+      const listBody = (await listResponse.json()) as { runs: Array<{ id: string }> };
+      return listBody.runs.every((entry) => entry.id !== run.id);
+    });
+  });
+});
+
+test("GET /api/sessions/:id/runs?active=true does not surface another user's run", async () => {
+  resetDomainState();
+  configureModelGatewayFactory(() => fakeGatewayEmitting([]));
+  let sessionId = "";
+
+  await withServer(createFakeAuthService(USER_A), async (baseUrl) => {
+    sessionId = await createOwnedSession(baseUrl);
+    await fetch(`${baseUrl}/api/sessions/${sessionId}/runs`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: "ezu_session=valid-session",
+        "idempotency-key": "req-1",
+      },
+      body: JSON.stringify({ kind: "prompt", text: "hi" }),
+    });
+  });
+
+  await withServer(createFakeAuthService(USER_B), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/runs?active=true`, {
+      headers: { cookie: "ezu_session=valid-session" },
+    });
+    assert.equal(response.status, 404);
   });
 });

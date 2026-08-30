@@ -185,3 +185,41 @@ export interface UsagePage {
   limit: number;
   offset: number;
 }
+
+export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface RunDto {
+  id: string;
+  sessionId: string;
+  status: RunStatus;
+  lastEventSeq: number;
+  error?: string;
+}
+
+export interface RunMessageDeltaEvent {
+  type: "message.delta";
+  messageId: string;
+  text: string;
+  role?: string;
+}
+
+export interface RunMessageCompletedEvent {
+  type: "message.completed";
+  messageId: string;
+}
+
+/**
+ * A run's agent event, as carried by an SSE `event: agent` frame. Only
+ * `message.delta`/`message.completed` are narrowly typed because the
+ * conversation stream renders them live; every other event type is a
+ * passthrough signal telling the caller to refresh the session instead.
+ */
+export type RunAgentEventDto =
+  | RunMessageDeltaEvent
+  | RunMessageCompletedEvent
+  | ({ type: string } & Record<string, unknown>);
+
+export interface RunEventDto {
+  seq: number;
+  event: RunAgentEventDto;
+}

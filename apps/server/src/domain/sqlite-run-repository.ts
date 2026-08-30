@@ -164,6 +164,12 @@ export function createSqliteRunRepository(
       const { listRunsByStatus } = await import("@ezu/db");
       return listRunsByStatus(db, "queued").map(toRunRecord);
     },
+
+    async listRunsForSession(sessionId) {
+      const db = await getDb();
+      const { listRunsBySession } = await import("@ezu/db");
+      return listRunsBySession(db, sessionId).map(toRunRecord);
+    },
   };
 
   async function transitionToTerminal(

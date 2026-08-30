@@ -54,6 +54,8 @@ export interface RunRepository {
   listRunningRuns(): Promise<RunRecord[]>;
   /** Runs still marked "queued" from a previous process lifetime, recoverable on restart. */
   listQueuedRuns(): Promise<RunRecord[]>;
+  /** All runs recorded for a session, newest first. */
+  listRunsForSession(sessionId: string): Promise<RunRecord[]>;
 }
 
 function nowIso(): string {
@@ -184,6 +186,12 @@ export function createMemoryRunRepository(): RunRepository {
 
     async listQueuedRuns() {
       return [...runs.values()].filter((run) => run.status === "queued");
+    },
+
+    async listRunsForSession(sessionId) {
+      return [...runs.values()]
+        .filter((run) => run.sessionId === sessionId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
   };
 }

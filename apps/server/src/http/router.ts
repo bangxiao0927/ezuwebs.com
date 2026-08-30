@@ -38,6 +38,7 @@ import {
   cancelRun,
   createRun,
   getRun,
+  listActiveRuns,
   pollRunStream,
   RunNotFoundError,
 } from "../domain/run-service.js";
@@ -495,6 +496,17 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
           return;
         }
 
+        if (action === "runs" && !segments[4] && method === "GET") {
+          const activeOnly = url.searchParams.get("active") === "true";
+          if (!activeOnly) {
+            sendJson(response, 400, { error: "Only active=true run listing is supported" } satisfies JsonError);
+            return;
+          }
+          const runs = await listActiveRuns(sessionId, currentUserId);
+          sendJson(response, 200, { runs });
+          return;
+        }
+
         if (action === "runs" && segments[4] && !segments[5] && method === "GET") {
           const runId = decodeURIComponent(segments[4]!);
           const run = await getRun(sessionId, runId, currentUserId);
@@ -505,9 +517,9 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
         if (action === "runs" && segments[4] && segments[5] === "events" && method === "GET") {
           const runId = decodeURIComponent(segments[4]!);
           const afterSeqParam = url.searchParams.get("afterSeq");
-          const afterSeq = afterSeqParam === null ? 0 : Number(afterSeqParam);
-          if (!Number.isInteger(afterSeq) || afterSeq < 0) {
-            sendJson(response, 400, { error: "afterSeq must be a non-negative integer" } satisfies JsonError);
+          const afterSeq = afterSeqParam === null ? -1 : Number(afterSeqParam);
+          if (!Number.isInteger(afterSeq) || afterSeq < -1) {
+            sendJson(response, 400, { error: "afterSeq must be an integer of -1 or greater" } satisfies JsonError);
             return;
           }
           // Ownership check up front: a stream that fails mid-flight cannot

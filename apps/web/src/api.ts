@@ -4,6 +4,7 @@ import type {
   BillingSummary,
   Dashboard,
   PatchStrategy,
+  RunDto,
   Session,
   SessionSummary,
   UsagePage,
@@ -12,8 +13,10 @@ import type {
 } from "./types";
 
 import { ApiError } from "./apiError";
+import { openRunEventStream, type RunEventStreamHandle, type RunEventStreamHandlers } from "./lib/runEventStream";
 
 export { ApiError };
+export type { RunEventStreamHandle, RunEventStreamHandlers };
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
@@ -199,4 +202,44 @@ export async function grantDevCredits(packageId: string): Promise<BillingSummary
     method: "POST",
     body: JSON.stringify({ packageId }),
   });
+}
+
+export async function createPromptRun(sessionId: string, text: string, requestId: string): Promise<RunDto> {
+  const data = await request<{ run: RunDto }>(`/sessions/${encodeURIComponent(sessionId)}/runs`, {
+    method: "POST",
+    headers: { "idempotency-key": requestId },
+    body: JSON.stringify({ kind: "prompt", text, requestId }),
+  });
+  return data.run;
+}
+
+export async function getRun(sessionId: string, runId: string): Promise<RunDto> {
+  const data = await request<{ run: RunDto }>(
+    `/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}`,
+  );
+  return data.run;
+}
+
+export async function cancelRun(sessionId: string, runId: string): Promise<RunDto> {
+  const data = await request<{ run: RunDto }>(
+    `/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/cancel`,
+    { method: "POST" },
+  );
+  return data.run;
+}
+
+export async function listActiveRuns(sessionId: string): Promise<RunDto[]> {
+  const data = await request<{ runs: RunDto[] }>(
+    `/sessions/${encodeURIComponent(sessionId)}/runs?active=true`,
+  );
+  return data.runs;
+}
+
+/** Streams a run's agent events over SSE, reconnecting on drop until it reaches a terminal status. */
+export function streamRunEvents(
+  sessionId: string,
+  runId: string,
+  handlers: RunEventStreamHandlers,
+): RunEventStreamHandle {
+  return openRunEventStream(sessionId, runId, handlers, { apiBase: API_BASE });
 }
