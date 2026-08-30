@@ -1,29 +1,27 @@
-import { type RuntimeAdapter, type RuntimeProcess } from "@ezu/core";
-import { type RuntimePort } from "@ezu/protocol";
-
-export interface RemoteRuntimeConfig {
-  baseUrl: string;
-  projectId: string;
-}
-
-export class RemoteRuntimeStub {
-  constructor(readonly config: RemoteRuntimeConfig) {}
-}
-
-export function createRemoteRuntimeStub(config: RemoteRuntimeConfig): RuntimeAdapter {
-  const notImplemented = () => {
-    throw new Error(`Remote runtime not implemented for ${config.baseUrl}`);
-  };
-
-  return {
-    readFile: async () => notImplemented(),
-    writeFile: async () => notImplemented(),
-    patchFile: async () => notImplemented(),
-    listFiles: async () => notImplemented(),
-    deleteFile: async () => notImplemented(),
-    runCommand: async () => notImplemented() as Promise<RuntimeProcess>,
-    openPreview: async () => notImplemented() as Promise<RuntimePort>,
-    watchFiles: async () => notImplemented() as Promise<() => void>,
-    watchPorts: async () => notImplemented() as Promise<() => void>,
-  };
-}
+export {
+  type RemoteRuntimeConfig,
+  type RemoteRuntimeConfigInput,
+  type RemoteRuntimeLimits,
+  type RemoteRuntimeSharedConfig,
+  type RemoteRuntimeSharedConfigInput,
+  validateRemoteRuntimeConfig,
+  validateRemoteRuntimeSharedConfig,
+} from "./config.js";
+export {
+  RemoteRuntimeConfigError,
+  RemoteRuntimeConnectTimeoutError,
+  RemoteRuntimeError,
+  RemoteRuntimeHttpError,
+  RemoteRuntimePolicyError,
+  RemoteRuntimePreviewRejectedError,
+  RemoteRuntimeProtocolError,
+  RemoteRuntimeReadTimeoutError,
+  RemoteRuntimeResponseTooLargeError,
+  RemoteRuntimeSessionMismatchError,
+  RemoteRuntimeValidationError,
+} from "./errors.js";
+export {
+  createRemoteRuntimeAdapter,
+  RUNTIME_POLICY_TIMEOUT_EXIT_CODE,
+  type RemoteRuntimeSeedFile,
+} from "./remote-runtime-adapter.js";

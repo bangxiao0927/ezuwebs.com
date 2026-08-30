@@ -1,6 +1,9 @@
 import { createServer } from "node:http";
 
+import { createRemoteRuntimeAdapter } from "@ezu/runtime-remote";
+
 import { resolveBillingEnabled } from "./config/billing-config.js";
+import { resolveRuntimeProviderConfig } from "./config/runtime-config.js";
 import { configureBillingEnabled, configureBillingStore } from "./domain/billing/billing-service.js";
 import { createSqliteBillingStore } from "./domain/billing/sqlite-billing-store.js";
 import {
@@ -68,15 +71,28 @@ function createConfiguredRunRepository(): RunRepository {
 
 const sessionRepository = await createConfiguredSessionRepository();
 configureSessionRepository(sessionRepository);
+const billingEnabled = resolveBillingEnabled(process.env);
+const runtimeProviderConfig = resolveRuntimeProviderConfig(process.env, { billingEnabled });
 const configuredIdleTtlMs = Number.parseInt(process.env.SESSION_RUNTIME_IDLE_TTL_MS ?? "", 10);
 configureSessionRuntimeManager(
   createSessionRuntimeManager(
-    Number.isFinite(configuredIdleTtlMs) && configuredIdleTtlMs > 0 ? { idleTtlMs: configuredIdleTtlMs } : {},
+    {
+      ...(Number.isFinite(configuredIdleTtlMs) && configuredIdleTtlMs > 0 ? { idleTtlMs: configuredIdleTtlMs } : {}),
+      ...(runtimeProviderConfig.provider === "remote"
+        ? {
+            createRuntime: (sessionId, seedFiles, projectId) =>
+              createRemoteRuntimeAdapter(
+                { ...runtimeProviderConfig.remote, sessionId, projectId: projectId ?? sessionId },
+                seedFiles,
+              ),
+          }
+        : {}),
+    },
   ),
 );
 configureRunRepository(createConfiguredRunRepository());
 configureBillingStore(createSqliteBillingStore());
-configureBillingEnabled(resolveBillingEnabled(process.env));
+configureBillingEnabled(billingEnabled);
 
 const handler = createApiHandler();
 const server = createServer((request, response) => {

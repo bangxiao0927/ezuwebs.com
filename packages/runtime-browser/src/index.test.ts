@@ -69,3 +69,15 @@ test("patching a seeded file preserves its prior content instead of starting fro
 
   assert.equal(await runtime.readFile("src/App.tsx"), "const seeded = true;\n// appended patch");
 });
+
+test("snapshotFiles returns every file's path and content directly from the in-memory map", async () => {
+  const runtime = new BrowserRuntimeStub([
+    { path: "src/App.tsx", content: "export const App = 1;" },
+    { path: "README.md", content: "# Hello" },
+  ]);
+
+  assert.deepEqual(await runtime.snapshotFiles(), [
+    { path: "README.md", content: "# Hello" },
+    { path: "src/App.tsx", content: "export const App = 1;" },
+  ]);
+});

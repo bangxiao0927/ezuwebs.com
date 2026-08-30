@@ -18,6 +18,7 @@
     "@ezu/model-gateway": "workspace:*",
     "@ezu/protocol": "workspace:*",
     "@ezu/runtime-browser": "workspace:*",
+    "@ezu/runtime-remote": "workspace:*",
     "@ezu/ui": "workspace:*"
   },
   "devDependencies": {

@@ -525,6 +525,7 @@ export async function resolveApproval(
             runtime,
             ...(record.bootstrap.workspaceFiles ? { workspaceFiles: record.bootstrap.workspaceFiles } : {}),
           }),
+        { projectId: record.bootstrap.projectId },
       );
       record.events.push(...dropNoisyEvents(result.events));
       record.bootstrap = { ...record.bootstrap, workspaceFiles };
@@ -634,6 +635,7 @@ export async function retryAction(
             runtime,
             ...(record.bootstrap.workspaceFiles ? { workspaceFiles: record.bootstrap.workspaceFiles } : {}),
           }),
+        { projectId: record.bootstrap.projectId },
       );
       record.events.push(...dropNoisyEvents(result.events));
       record.bootstrap = { ...record.bootstrap, workspaceFiles };

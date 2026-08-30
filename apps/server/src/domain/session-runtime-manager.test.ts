@@ -210,3 +210,53 @@ test("withRuntime snapshots the workspace after the operation runs", async () =>
 
   assert.deepEqual(workspaceFiles, [{ path: "src/index.ts", content: "export const value = 1;" }]);
 });
+
+test("withRuntime prefers the runtime's own snapshotFiles over listFiles + readFile per path", async () => {
+  let listFilesCalls = 0;
+  let readFileCalls = 0;
+  let snapshotFilesCalls = 0;
+  const files = new Map<string, string>();
+
+  const manager = createSessionRuntimeManager({
+    createRuntime: () => ({
+      async readFile(path) {
+        readFileCalls += 1;
+        return files.get(path) ?? "";
+      },
+      async writeFile(path, content) {
+        files.set(path, content);
+      },
+      async patchFile() {},
+      async listFiles() {
+        listFilesCalls += 1;
+        return [...files.keys()];
+      },
+      async deleteFile() {},
+      async runCommand() {
+        throw new Error("not used in this test");
+      },
+      async openPreview() {
+        throw new Error("not used in this test");
+      },
+      async watchFiles() {
+        return () => {};
+      },
+      async watchPorts() {
+        return () => {};
+      },
+      async snapshotFiles() {
+        snapshotFilesCalls += 1;
+        return [...files.entries()].map(([path, content]) => ({ path, content }));
+      },
+    }),
+  });
+
+  const { workspaceFiles } = await manager.withRuntime("session-a", [], async (runtime) => {
+    await runtime.writeFile("src/index.ts", "export const value = 1;");
+  });
+
+  assert.deepEqual(workspaceFiles, [{ path: "src/index.ts", content: "export const value = 1;" }]);
+  assert.equal(snapshotFilesCalls, 1);
+  assert.equal(listFilesCalls, 0, "listFiles must not be used when snapshotFiles is available");
+  assert.equal(readFileCalls, 0, "readFile must not be used when snapshotFiles is available");
+});

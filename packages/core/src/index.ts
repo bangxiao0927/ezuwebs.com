@@ -38,6 +38,10 @@ export interface RuntimeAdapter {
   watchPorts(
     cb: (event: { port: number; url: string; status: "open" | "close" }) => void,
   ): Promise<() => void>;
+  /** Returns every file's full content in one call, if the runtime can provide it more cheaply than listFiles + readFile per path. Optional: callers fall back to listFiles + readFile when absent. */
+  snapshotFiles?(): Promise<Array<{ path: string; content: string }>>;
+  /** Releases any external resources (e.g. a remote sandbox) backing this runtime. Optional: in-process runtimes have nothing to release. */
+  dispose?(): Promise<void>;
 }
 
 export interface SessionStore {
