@@ -20,10 +20,14 @@ export interface ModelProfile {
 
 export interface PlannerInput {
   prompt: string;
+  /** Aborts the underlying model request when the caller cancels the run. */
+  signal?: AbortSignal;
 }
 
 export interface CoderInput {
   prompt: string;
+  /** Aborts the underlying model request when the caller cancels the run. */
+  signal?: AbortSignal;
 }
 
 export interface SummaryInput {

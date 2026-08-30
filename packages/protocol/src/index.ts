@@ -228,6 +228,13 @@ export const agentEventSchema = z.discriminatedUnion("type", [
     status: sessionLifecycleStatusSchema,
     reason: z.string().optional(),
   }),
+  z.object({
+    type: z.literal("model.usage"),
+    model: z.string(),
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+  }),
 ]);
 export type AgentEvent = z.infer<typeof agentEventSchema>;
 

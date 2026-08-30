@@ -2,12 +2,46 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { executeApprovedBlockEdit, bootstrapBlockEditDemo } from "./index.js";
+import { createBrowserRuntimeStub } from "@ezu/runtime-browser";
+import { type RuntimeAdapter } from "@ezu/core";
 import {
   createReplacementStructurePatch,
   inferStructuralChanges,
   normalizeReason,
   type ReplacementPatchInput,
 } from "./replacement.js";
+
+function withWatcherTracking(runtime: RuntimeAdapter): { runtime: RuntimeAdapter; activeWatcherCount: () => number } {
+  let active = 0;
+  return {
+    activeWatcherCount: () => active,
+    runtime: {
+      readFile: (path) => runtime.readFile(path),
+      writeFile: (path, content) => runtime.writeFile(path, content),
+      patchFile: (path, patch) => runtime.patchFile(path, patch),
+      listFiles: (root) => runtime.listFiles(root),
+      deleteFile: (path) => runtime.deleteFile(path),
+      runCommand: (command, opts) => runtime.runCommand(command, opts),
+      openPreview: (port) => runtime.openPreview(port),
+      async watchFiles(cb) {
+        active += 1;
+        const stop = await runtime.watchFiles(cb);
+        return () => {
+          active -= 1;
+          stop();
+        };
+      },
+      async watchPorts(cb) {
+        active += 1;
+        const stop = await runtime.watchPorts(cb);
+        return () => {
+          active -= 1;
+          stop();
+        };
+      },
+    },
+  };
+}
 
 function createOptions(rejectionReason: string): ReplacementPatchInput {
   return {
@@ -100,6 +134,7 @@ test("executeApprovedBlockEdit runs the approved action exactly once and opens a
     sessionId: "gating-session-2",
     projectId: "gating-project-2",
     action: createdAction.action,
+    runtime: createBrowserRuntimeStub(),
   });
 
   const updates = execution.events.filter(
@@ -130,6 +165,7 @@ test("executeApprovedBlockEdit seeds the runtime with the session's existing wor
     projectId: "seed-project",
     action: createdAction.action,
     workspaceFiles: [{ path: "README.md", content: "# Existing project" }],
+    runtime: createBrowserRuntimeStub([{ path: "README.md", content: "# Existing project" }]),
   });
 
   const readme = execution.workspaceFiles.find((file) => file.path === "README.md");
@@ -138,4 +174,57 @@ test("executeApprovedBlockEdit seeds the runtime with the session's existing wor
 
   const patchedFile = execution.workspaceFiles.find((file) => file.path === "src/App.tsx");
   assert.ok(patchedFile, "the successfully patched file should be synced back into workspace files");
+});
+
+test("executeApprovedBlockEdit unbinds its watch bridge after each run against a shared runtime", async () => {
+  const events = await bootstrapBlockEditDemo({
+    sessionId: "reused-runtime-session",
+    projectId: "reused-runtime-project",
+    blockId: "hero",
+    targetPath: "src/App.tsx",
+    suggestedPrompt: "Refine the hero block copy, first pass.",
+  });
+  const firstAction = events.find(
+    (event) => event.type === "action.created" && event.action.action.type === "file.patch",
+  );
+  assert.ok(firstAction && firstAction.type === "action.created");
+
+  const tracked = withWatcherTracking(createBrowserRuntimeStub());
+
+  const firstExecution = await executeApprovedBlockEdit({
+    sessionId: "reused-runtime-session",
+    projectId: "reused-runtime-project",
+    action: firstAction.action,
+    runtime: tracked.runtime,
+  });
+  assert.equal(tracked.activeWatcherCount(), 0, "watchers must be unbound once the first run settles");
+
+  const secondEvents = await bootstrapBlockEditDemo({
+    sessionId: "reused-runtime-session",
+    projectId: "reused-runtime-project",
+    blockId: "hero",
+    targetPath: "src/App.tsx",
+    suggestedPrompt: "Refine the hero block copy, second pass.",
+  });
+  const secondAction = secondEvents.find(
+    (event) => event.type === "action.created" && event.action.action.type === "file.patch",
+  );
+  assert.ok(secondAction && secondAction.type === "action.created");
+
+  const secondExecution = await executeApprovedBlockEdit({
+    sessionId: "reused-runtime-session",
+    projectId: "reused-runtime-project",
+    action: secondAction.action,
+    runtime: tracked.runtime,
+    workspaceFiles: firstExecution.workspaceFiles,
+  });
+  assert.equal(tracked.activeWatcherCount(), 0, "watchers must be unbound once the second run settles too");
+
+  const patched = secondExecution.workspaceFiles.find((file) => file.path === "src/App.tsx");
+  assert.ok(patched, "the second run's patch should be reflected in the workspace files");
+  assert.notEqual(
+    patched?.content,
+    firstExecution.workspaceFiles.find((file) => file.path === "src/App.tsx")?.content,
+    "the second patch should further change the file the first patch already touched",
+  );
 });

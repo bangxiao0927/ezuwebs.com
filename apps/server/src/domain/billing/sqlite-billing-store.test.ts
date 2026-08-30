@@ -154,3 +154,123 @@ test("debitAndRecordUsage debits and records the usage event atomically, and is 
   assert.equal(await store.getUsageEventStatus("usage-event:atomic-2"), undefined);
   assert.equal(await store.getBalance(user.id), 70);
 });
+
+test("settleUsage reconciles a reservation to its actual cost and is idempotent", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "ezu-billing-"));
+  const databaseUrl = path.join(directory, "billing.db");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let db;
+  try {
+    db = openDatabase({ databaseUrl, runMigrations: true });
+  } catch (cause) {
+    if (cause instanceof Error && /bindings file/.test(cause.message)) {
+      t.skip("better-sqlite3 native binding is unavailable in this environment");
+      return;
+    }
+    throw cause;
+  }
+
+  const user = createUser(db, { email: "billing-settle@example.com" });
+  const store = createSqliteBillingStore({ databaseUrl });
+  await store.appendGrant({
+    userId: user.id,
+    amount: 100,
+    reason: "initial free grant",
+    idempotencyKey: `initial-grant:${user.id}`,
+  });
+  await store.debitAndRecordUsage({
+    userId: user.id,
+    credits: 10,
+    debitReason: "usage: prompt",
+    debitIdempotencyKey: "usage-debit:run-1",
+    usageEvent: {
+      id: "usage-event:run-1",
+      userId: user.id,
+      kind: "prompt",
+      units: 1,
+      credits: 10,
+      metering: "estimated",
+    },
+  });
+
+  const settleInput = {
+    userId: user.id,
+    runId: "run-1",
+    usageEventId: "usage-event:run-1",
+    reservedCredits: 10,
+    finalCredits: 3,
+    units: 2500,
+    model: "gpt-4o-mini",
+    metering: "actual" as const,
+    reason: "usage settlement: prompt",
+  };
+  const settled = await store.settleUsage(settleInput);
+  const replay = await store.settleUsage(settleInput);
+
+  assert.equal(settled.applied, true);
+  assert.equal(settled.sufficient, true);
+  assert.equal(settled.finalCredits, 3);
+  assert.equal(replay.applied, false);
+  assert.equal(await store.getBalance(user.id), 97);
+
+  const page = await store.listUsageEvents(user.id, { limit: 10, offset: 0 });
+  assert.equal(page.events[0]?.credits, 3);
+  assert.equal(page.events[0]?.units, 2500);
+  assert.equal(page.events[0]?.model, "gpt-4o-mini");
+  assert.equal(page.events[0]?.metering, "actual");
+});
+
+test("getSettlement reports undefined before settlement and the settled outcome after", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "ezu-billing-"));
+  const databaseUrl = path.join(directory, "billing.db");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let db;
+  try {
+    db = openDatabase({ databaseUrl, runMigrations: true });
+  } catch (cause) {
+    if (cause instanceof Error && /bindings file/.test(cause.message)) {
+      t.skip("better-sqlite3 native binding is unavailable in this environment");
+      return;
+    }
+    throw cause;
+  }
+
+  const user = createUser(db, { email: "billing-get-settlement@example.com" });
+  const store = createSqliteBillingStore({ databaseUrl });
+  await store.appendGrant({
+    userId: user.id,
+    amount: 100,
+    reason: "initial free grant",
+    idempotencyKey: `initial-grant:${user.id}`,
+  });
+  await store.debitAndRecordUsage({
+    userId: user.id,
+    credits: 10,
+    debitReason: "usage: prompt",
+    debitIdempotencyKey: "usage-debit:run-1",
+    usageEvent: {
+      id: "usage-event:run-1",
+      userId: user.id,
+      kind: "prompt",
+      units: 1,
+      credits: 10,
+      metering: "estimated",
+    },
+  });
+
+  assert.equal(await store.getSettlement("run-1"), undefined);
+
+  await store.settleUsage({
+    userId: user.id,
+    runId: "run-1",
+    usageEventId: "usage-event:run-1",
+    reservedCredits: 10,
+    finalCredits: 3,
+    metering: "actual",
+    reason: "usage settlement: prompt",
+  });
+
+  const settlement = await store.getSettlement("run-1");
+  assert.equal(settlement?.sufficient, true);
+  assert.equal(settlement?.finalCredits, 3);
+});

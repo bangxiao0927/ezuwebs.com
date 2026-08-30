@@ -48,9 +48,15 @@ importers:
       '@ezu/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@ezu/model-gateway':
+        specifier: workspace:*
+        version: link:../../packages/model-gateway
       '@ezu/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@ezu/runtime-browser':
+        specifier: workspace:*
+        version: link:../../packages/runtime-browser
       '@ezu/ui':
         specifier: workspace:*
         version: link:../../packages/ui

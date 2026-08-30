@@ -1,20 +1,25 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 
 import {
   applyEdit,
+  cancelRun as cancelRunRequest,
+  createPromptRun,
   getSession,
   getWorkspaceFiles,
+  listActiveRuns,
   resolveApproval,
   resolveChoice,
   resolveInput,
   selectBlock,
-  sendPrompt,
+  streamRunEvents,
+  type RunEventStreamHandle,
 } from "../api";
 import { classifyRequestOutcome, decideIdempotency } from "../lib/idempotency";
 import { initialPropertyValues, propertiesWithValues } from "../lib/propertyValues";
+import { applyRunEvent, createRunStreamState, type RunStreamState } from "../lib/runStream";
 import { navigateHome } from "../router";
-import type { PatchStrategy, Session, WorkspaceFile } from "../types";
+import type { PatchStrategy, RunDto, Session, WorkspaceFile } from "../types";
 import ConversationColumn from "./ConversationColumn.vue";
 import WorkspaceColumn from "./WorkspaceColumn.vue";
 
@@ -39,6 +44,22 @@ const activeFile = ref<string | undefined>();
 const pendingEditRequestId = ref<string | undefined>();
 const pendingPromptRequestId = ref<string | undefined>();
 
+const activeRun = ref<RunDto | undefined>();
+const runConnectionState = ref<"connecting" | "live" | "reconnecting">("live");
+const runStream = ref<RunStreamState>(createRunStreamState());
+let runStreamHandle: RunEventStreamHandle | undefined;
+
+const runStatusLabel = computed(() => {
+  if (!activeRun.value) return undefined;
+  if (runConnectionState.value === "reconnecting") return "reconnecting";
+  return activeRun.value.status;
+});
+
+const canCancelRun = computed(() => {
+  const status = activeRun.value?.status;
+  return status === "queued" || status === "running";
+});
+
 /**
  * Reuses the same requestId across retries of the same user action so a
  * network retry cannot cause the backend to charge or run the agent twice.
@@ -52,7 +73,16 @@ function requestIdFor(pending: { value: string | undefined }): string {
   return pending.value;
 }
 
-const viewModel = computed(() => session.value?.viewModel ?? null);
+const viewModel = computed(() => {
+  const base = session.value?.viewModel;
+  if (!base) return null;
+  const canonicalIds = new Set(base.chatMessages.map((message) => message.id));
+  const liveMessages = runStream.value.messages
+    .filter((message) => !canonicalIds.has(message.id))
+    .map((message) => ({ id: message.id, role: message.role, content: message.text }));
+  if (liveMessages.length === 0) return base;
+  return { ...base, chatMessages: [...base.chatMessages, ...liveMessages] };
+});
 
 function syncFromSession(next: Session): void {
   session.value = next;
@@ -74,6 +104,9 @@ function flashToast(message: string): void {
 async function load(): Promise<void> {
   loading.value = true;
   error.value = undefined;
+  disconnectRunStream();
+  activeRun.value = undefined;
+  runStream.value = createRunStreamState();
   try {
     const next = await getSession(props.sessionId);
     syncFromSession(next);
@@ -81,6 +114,7 @@ async function load(): Promise<void> {
     if (files.value.length > 0) {
       activeFile.value = files.value[0]?.path;
     }
+    await recoverActiveRun(next.id);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Failed to load session";
   } finally {
@@ -89,6 +123,85 @@ async function load(): Promise<void> {
 }
 
 watch(() => props.sessionId, load, { immediate: true });
+
+onUnmounted(() => {
+  disconnectRunStream();
+});
+
+function disconnectRunStream(): void {
+  runStreamHandle?.close();
+  runStreamHandle = undefined;
+}
+
+/**
+ * Attaches to a run's SSE stream, live-updating the conversation as
+ * message.delta events arrive. On any terminal status the session is
+ * refreshed once from the server, which is the source of truth for
+ * everything other than the in-flight message text.
+ */
+function connectToRun(run: RunDto): void {
+  disconnectRunStream();
+  activeRun.value = run;
+  runConnectionState.value = "live";
+  runStream.value = createRunStreamState();
+
+  runStreamHandle = streamRunEvents(session.value!.id, run.id, {
+    onEvent: (entry) => {
+      runConnectionState.value = "live";
+      runStream.value = applyRunEvent(runStream.value, entry.event);
+    },
+    onStatus: (status) => {
+      runConnectionState.value = "live";
+      if (!activeRun.value || activeRun.value.id !== run.id) return;
+      activeRun.value = { ...activeRun.value, status };
+      if (status === "completed" || status === "failed" || status === "cancelled") {
+        void finalizeRun(status);
+      }
+    },
+    onReconnecting: () => {
+      runConnectionState.value = "reconnecting";
+    },
+    onError: (error) => {
+      disconnectRunStream();
+      flashToast(error.message || "Lost connection to the run.");
+      activeRun.value = undefined;
+      runConnectionState.value = "live";
+      runStream.value = createRunStreamState();
+    },
+  });
+}
+
+async function finalizeRun(status: RunDto["status"]): Promise<void> {
+  disconnectRunStream();
+  try {
+    const next = await getSession(session.value!.id);
+    syncFromSession(next);
+  } catch {
+    // A refresh failure here just leaves the streamed messages in place
+    // until the next reload; the run itself has already finished.
+  }
+  if (status === "failed") {
+    flashToast(activeRun.value?.error ?? "The run failed.");
+  } else if (status === "cancelled") {
+    flashToast("Run cancelled.");
+  } else {
+    flashToast("Prompt routed into the active session.");
+  }
+  activeRun.value = undefined;
+  runStream.value = createRunStreamState();
+}
+
+/** Reattaches to a run left in flight by a previous page load, if any. */
+async function recoverActiveRun(sessionId: string): Promise<void> {
+  try {
+    const [active] = await listActiveRuns(sessionId);
+    if (active) {
+      connectToRun(active);
+    }
+  } catch {
+    // Recovery is best-effort: a failed lookup just starts the user fresh.
+  }
+}
 
 async function run<T>(operation: () => Promise<T>): Promise<T | undefined> {
   if (busy.value) {
@@ -165,7 +278,7 @@ async function handleSubmitEdit(): Promise<void> {
 
 async function handlePrompt(): Promise<void> {
   const text = composer.value.trim();
-  if (busy.value) {
+  if (busy.value || activeRun.value) {
     return;
   }
   if (!text) {
@@ -173,12 +286,18 @@ async function handlePrompt(): Promise<void> {
     return;
   }
   const requestId = requestIdFor(pendingPromptRequestId);
-  const next = await runIdempotent(pendingPromptRequestId, () => sendPrompt(session.value!.id, text, requestId));
-  if (next) {
-    syncFromSession(next);
+  const run = await runIdempotent(pendingPromptRequestId, () =>
+    createPromptRun(session.value!.id, text, requestId),
+  );
+  if (run) {
     composer.value = "";
-    flashToast("Prompt routed into the active session.");
+    connectToRun(run);
   }
+}
+
+async function handleCancelRun(): Promise<void> {
+  if (!activeRun.value) return;
+  await run(() => cancelRunRequest(session.value!.id, activeRun.value!.id));
 }
 
 async function handleApproval(decision: "approved" | "rejected"): Promise<void> {
@@ -241,6 +360,17 @@ async function handleAnswer(): Promise<void> {
       <div class="topbar-right">
         <span class="runtime-pill">runtime: {{ session.config.runtimeType }}</span>
         <span v-if="busy" class="runtime-pill busy">working…</span>
+        <span v-if="runStatusLabel" :class="['runtime-pill', 'run-status', runStatusLabel]">
+          run: {{ runStatusLabel }}
+        </span>
+        <button
+          v-if="canCancelRun"
+          type="button"
+          class="ghost-button"
+          @click="handleCancelRun"
+        >
+          Cancel
+        </button>
       </div>
     </header>
 
@@ -251,7 +381,7 @@ async function handleAnswer(): Promise<void> {
         v-model:composer="composer"
         v-model:reject-reason="rejectReason"
         v-model:answer-value="answerValue"
-        :busy="busy"
+        :busy="busy || !!activeRun"
         :on-send="handlePrompt"
         :on-approve="() => handleApproval('approved')"
         :on-reject="() => handleApproval('rejected')"

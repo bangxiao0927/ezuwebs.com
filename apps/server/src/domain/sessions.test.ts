@@ -3,16 +3,20 @@ import assert from "node:assert/strict";
 
 import {
   configureSessionRepository,
+  configureSessionRuntimeManager,
   createSession,
   getSession,
+  getSessionWorkspaceFiles,
   InteractionConflictError,
   listSessionsForOwner,
   resolveApproval,
   retryAction,
   selectBlock,
+  sendPrompt,
   SessionNotFoundError,
 } from "./sessions.js";
 import { createMemorySessionRepository, type SessionRepository } from "./session-repository.js";
+import { createSessionRuntimeManager } from "./session-runtime-manager.js";
 
 function pendingApproval(session: {
   viewModel: { pendingInteraction?: { id: string; actionId?: string | undefined } | undefined };
@@ -261,4 +265,68 @@ test("a running action left behind by an interrupted approval is marked failed a
   const retried = await retryAction(session.id, actionId);
   const retriedAction = retried.viewModel.actions.find((action) => action.id === actionId);
   assert.equal(retriedAction?.status, "completed");
+});
+
+test("two consecutive approved patches on the same session both persist and the preview stays open", async () => {
+  configureSessionRepository(createMemorySessionRepository());
+  configureSessionRuntimeManager(createSessionRuntimeManager());
+
+  const session = await createSession("club-promo");
+
+  const afterFirstPrompt = await sendPrompt(session.id, "Refine the hero copy, first pass.");
+  const firstApproval = pendingApproval(afterFirstPrompt);
+  const afterFirstApproval = await resolveApproval(session.id, firstApproval.interactionId, "approved", "");
+  assert.equal(
+    afterFirstApproval.viewModel.actions.find((action) => action.id === firstApproval.actionId)?.status,
+    "completed",
+  );
+  assert.equal(afterFirstApproval.viewModel.previews.length, 1, "the first approval should open exactly one preview");
+
+  const filesAfterFirstPatch = await getSessionWorkspaceFiles(session.id);
+  assert.ok(filesAfterFirstPatch.length > 0, "the first patch should have produced workspace files");
+
+  const afterSecondPrompt = await sendPrompt(session.id, "Refine the hero copy, second pass.");
+  const secondApproval = pendingApproval(afterSecondPrompt);
+  const afterSecondApproval = await resolveApproval(session.id, secondApproval.interactionId, "approved", "");
+  assert.equal(
+    afterSecondApproval.viewModel.actions.find((action) => action.id === secondApproval.actionId)?.status,
+    "completed",
+  );
+  assert.equal(
+    afterSecondApproval.viewModel.previews.length,
+    1,
+    "the second approval must not leave a second, duplicate preview open",
+  );
+
+  const filesAfterSecondPatch = await getSessionWorkspaceFiles(session.id);
+  const contentByPath = new Map(filesAfterFirstPatch.map((file) => [file.path, file.content]));
+  const changedPaths = filesAfterSecondPatch.filter((file) => contentByPath.get(file.path) !== file.content);
+  assert.ok(changedPaths.length > 0, "the second patch should further change a file the first patch touched");
+});
+
+test("a session's workspace can be rebuilt from persisted files after a runtime manager restart", async () => {
+  configureSessionRepository(createMemorySessionRepository());
+  configureSessionRuntimeManager(createSessionRuntimeManager());
+
+  const session = await createSession("club-promo");
+  const afterPrompt = await sendPrompt(session.id, "Refine the hero copy.");
+  const approval = pendingApproval(afterPrompt);
+  await resolveApproval(session.id, approval.interactionId, "approved", "");
+
+  const filesBeforeRestart = await getSessionWorkspaceFiles(session.id);
+  assert.ok(filesBeforeRestart.length > 0);
+
+  // Simulate a process restart: a fresh manager with no in-memory runtimes,
+  // backed only by what the session repository persisted.
+  configureSessionRuntimeManager(createSessionRuntimeManager());
+
+  const retriedAfterRestart = await sendPrompt(session.id, "Refine the hero copy again after restart.");
+  const approvalAfterRestart = pendingApproval(retriedAfterRestart);
+  await resolveApproval(session.id, approvalAfterRestart.interactionId, "approved", "");
+
+  const filesAfterRestart = await getSessionWorkspaceFiles(session.id);
+  for (const file of filesBeforeRestart) {
+    const rebuilt = filesAfterRestart.find((candidate) => candidate.path === file.path);
+    assert.ok(rebuilt, `${file.path} should still be present after the manager rebuilds from persisted files`);
+  }
 });
