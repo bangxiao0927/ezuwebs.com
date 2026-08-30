@@ -82,3 +82,71 @@ export const usageEvents = sqliteTable(
 
 export type CreditLedgerEntry = typeof creditLedger.$inferSelect;
 export type UsageEvent = typeof usageEvents.$inferSelect;
+
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id").references(() => users.id, { onDelete: "cascade" }),
+    definitionId: text("definition_id").notNull(),
+    projectId: text("project_id").notNull(),
+    // JSON-encoded WebAppBootstrap fields (config, workspaceRoot, selectedDiffActionId, ...).
+    bootstrapJson: text("bootstrap_json").notNull(),
+    webEditorJson: text("web_editor_json").notNull(),
+    // Version tag for the shared default workspace snapshot this session's
+    // workspace_files rows are diffed against; null when the session has no
+    // baseline (workspaceFiles was never set).
+    workspaceBaselineVersion: text("workspace_baseline_version"),
+    version: integer("version").notNull().default(1),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [index("sessions_owner_user_id_idx").on(table.ownerUserId)],
+);
+
+export const sessionEvents = sqliteTable(
+  "session_events",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id").notNull().references(() => sessions.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    eventJson: text("event_json").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_events_session_seq_unique").on(table.sessionId, table.seq),
+    index("session_events_session_id_idx").on(table.sessionId),
+  ],
+);
+
+export const workspaceFiles = sqliteTable(
+  "workspace_files",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id").notNull().references(() => sessions.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    // Null marks a tombstone: a baseline file this session has removed.
+    content: text("content"),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("workspace_files_session_path_unique").on(table.sessionId, table.path),
+    index("workspace_files_session_id_idx").on(table.sessionId),
+  ],
+);
+
+export type SessionRow = typeof sessions.$inferSelect;
+export type SessionEventRow = typeof sessionEvents.$inferSelect;
+export type WorkspaceFileRow = typeof workspaceFiles.$inferSelect;
+
+export const workspaceBaselines = sqliteTable("workspace_baselines", {
+  // The value produced by the server's workspace baseline fingerprint
+  // (see apps/server/src/domain/workspace.ts:getWorkspaceBaselineVersion).
+  version: text("version").primaryKey(),
+  // JSON-encoded array of { path, content } entries for the full baseline
+  // snapshot this version was computed from.
+  filesJson: text("files_json").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export type WorkspaceBaselineRow = typeof workspaceBaselines.$inferSelect;

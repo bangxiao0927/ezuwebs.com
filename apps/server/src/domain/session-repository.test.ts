@@ -10,6 +10,7 @@ import { type AgentEvent } from "@ezu/protocol";
 import {
   createFileSessionRepository,
   createMemorySessionRepository,
+  importLegacyJsonSessionStore,
   type SessionRecord,
 } from "./session-repository.js";
 
@@ -42,6 +43,20 @@ test("createMemorySessionRepository returns a previously created session by id",
 
   const fetched = await repository.get("session-1");
   assert.equal(fetched?.id, "session-1");
+});
+
+test("listSummariesForOwner returns only the sessions owned by that user, without their events or webEditor state", async () => {
+  const repository = createMemorySessionRepository();
+  const owned = makeRecord("session-owned", []);
+  owned.ownerUserId = "user-a";
+  const other = makeRecord("session-other", []);
+  other.ownerUserId = "user-b";
+  await repository.create(owned);
+  await repository.create(other);
+
+  const summaries = await repository.listSummariesForOwner("user-a");
+
+  assert.deepEqual(summaries, [{ id: "session-owned", definitionId: "club-promo" }]);
 });
 
 test("recoverInterruptedSessions appends failure events for actions left in progress, preserving prior events", async () => {
@@ -153,6 +168,100 @@ test("createFileSessionRepository drops invalid records from a persisted file wh
       siblingFiles.some((name) => name.startsWith("sessions.json.corrupted-")),
       "the file containing invalid records should be backed up",
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("importLegacyJsonSessionStore is a no-op when the legacy file does not exist", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "ezu-sessions-"));
+  const file = path.join(directory, "sessions.json");
+  try {
+    const target = createMemorySessionRepository();
+
+    const result = await importLegacyJsonSessionStore(file, target);
+
+    assert.equal(result, undefined);
+    assert.deepEqual(await target.list(), []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("importLegacyJsonSessionStore imports legacy records into an empty target and renames the source file", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "ezu-sessions-"));
+  const file = path.join(directory, "sessions.json");
+  try {
+    await fsPromises.writeFile(file, JSON.stringify([makeRecord("legacy-1", [])]), "utf8");
+    const target = createMemorySessionRepository();
+
+    const result = await importLegacyJsonSessionStore(file, target);
+
+    assert.deepEqual(result, { importedCount: 1, skippedExistingCount: 0 });
+    assert.equal((await target.get("legacy-1"))?.id, "legacy-1");
+    const siblingFiles = await fsPromises.readdir(directory);
+    assert.ok(!siblingFiles.includes("sessions.json"), "the source file should have been renamed away");
+    assert.ok(siblingFiles.some((name) => name.startsWith("sessions.json.imported-")));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("importLegacyJsonSessionStore skips ids that already exist in the target instead of duplicating them", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "ezu-sessions-"));
+  const file = path.join(directory, "sessions.json");
+  try {
+    const action = {
+      id: "action-1",
+      source: "coder" as const,
+      action: { type: "command.run" as const, command: "pnpm build" },
+      status: "running" as const,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+    };
+    await fsPromises.writeFile(
+      file,
+      JSON.stringify([makeRecord("existing-1", [{ type: "action.created", action }])]),
+      "utf8",
+    );
+    const target = createMemorySessionRepository();
+    await target.create(makeRecord("existing-1", []));
+
+    const result = await importLegacyJsonSessionStore(file, target);
+
+    assert.deepEqual(result, { importedCount: 0, skippedExistingCount: 1 });
+    assert.deepEqual((await target.get("existing-1"))?.events, []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("importLegacyJsonSessionStore leaves the source file in place when a create fails, so a retry can pick up where it left off", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "ezu-sessions-"));
+  const file = path.join(directory, "sessions.json");
+  try {
+    await fsPromises.writeFile(
+      file,
+      JSON.stringify([makeRecord("legacy-a", []), makeRecord("legacy-b", [])]),
+      "utf8",
+    );
+    const target = createMemorySessionRepository();
+    const originalCreate = target.create.bind(target);
+    let createCalls = 0;
+    target.create = async (record) => {
+      createCalls += 1;
+      if (createCalls === 2) {
+        throw new Error("simulated create failure");
+      }
+      await originalCreate(record);
+    };
+
+    await assert.rejects(importLegacyJsonSessionStore(file, target), /simulated create failure/);
+
+    const siblingFiles = await fsPromises.readdir(directory);
+    assert.ok(siblingFiles.includes("sessions.json"), "the source file must remain for a retry");
+    assert.equal((await target.get("legacy-a"))?.id, "legacy-a");
+    assert.equal(await target.get("legacy-b"), undefined);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

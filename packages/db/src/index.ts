@@ -3,3 +3,4 @@ export * from "./schema.js";
 export * from "./users.js";
 export * from "./auth.js";
 export * from "./billing.js";
+export * from "./sessions.js";

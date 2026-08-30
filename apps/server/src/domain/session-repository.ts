@@ -12,11 +12,21 @@ export interface SessionRecord {
   ownerUserId?: string;
 }
 
+export interface SessionSummary {
+  id: string;
+  definitionId: string;
+}
+
 export interface SessionRepository {
   create(record: SessionRecord): Promise<void>;
   get(id: string): Promise<SessionRecord | undefined>;
   save(record: SessionRecord): Promise<void>;
   list(): Promise<SessionRecord[]>;
+  /**
+   * Lightweight, owner-scoped listing for dashboards: avoids hydrating each
+   * session's events, webEditor state, and workspace files.
+   */
+  listSummariesForOwner(ownerUserId: string): Promise<SessionSummary[]>;
   /**
    * Reconciles actions that were still pending or running the last time the
    * process stopped, turning them into failed/interrupted actions while
@@ -25,7 +35,7 @@ export interface SessionRepository {
   recoverInterruptedSessions(): Promise<void>;
 }
 
-function deriveLatestActions(record: SessionRecord) {
+export function deriveLatestActions(record: SessionRecord) {
   let session = createSessionState({ id: record.id, projectId: record.bootstrap.projectId });
   for (const event of record.events) {
     session = applyAgentEvent(session, event);
@@ -48,6 +58,11 @@ export function createMemorySessionRepository(): SessionRepository {
     },
     async list() {
       return [...records.values()];
+    },
+    async listSummariesForOwner(ownerUserId) {
+      return [...records.values()]
+        .filter((record) => record.ownerUserId === ownerUserId)
+        .map((record) => ({ id: record.id, definitionId: record.definitionId }));
     },
     async recoverInterruptedSessions() {
       for (const record of records.values()) {
@@ -91,18 +106,11 @@ async function backupCorruptedFile(
   return backupPath;
 }
 
-async function loadPersistedRecords(
+async function parsePersistedRecords(
+  rawContents: string,
   filePath: string,
   fileSystem: SessionRepositoryFileSystem,
 ): Promise<SessionRecord[]> {
-  let rawContents: string;
-  try {
-    rawContents = await fileSystem.readFile(filePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawContents);
@@ -135,6 +143,21 @@ async function loadPersistedRecords(
   }
 
   return validRecords;
+}
+
+async function loadPersistedRecords(
+  filePath: string,
+  fileSystem: SessionRepositoryFileSystem,
+): Promise<SessionRecord[]> {
+  let rawContents: string;
+  try {
+    rawContents = await fileSystem.readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+
+  return parsePersistedRecords(rawContents, filePath, fileSystem);
 }
 
 export async function createFileSessionRepository(
@@ -173,11 +196,58 @@ export async function createFileSessionRepository(
       await flush();
     },
     list: () => memory.list(),
+    listSummariesForOwner: (ownerUserId) => memory.listSummariesForOwner(ownerUserId),
     async recoverInterruptedSessions() {
       await memory.recoverInterruptedSessions();
       await flush();
     },
   };
+}
+
+export interface LegacyJsonImportResult {
+  importedCount: number;
+  skippedExistingCount: number;
+}
+
+/**
+ * One-time migration from the legacy JSON session store into a durable
+ * repository (e.g. SQLite). Idempotent: a session already present in
+ * `targetRepository` is left untouched rather than re-imported, so replaying
+ * this after a partial failure never duplicates events. On success the
+ * source file is renamed to `<path>.imported-<timestamp>`; on failure it is
+ * left in place so the import can be retried.
+ */
+export async function importLegacyJsonSessionStore(
+  filePath: string,
+  targetRepository: SessionRepository,
+  fileSystem: SessionRepositoryFileSystem = fs,
+): Promise<LegacyJsonImportResult | undefined> {
+  let rawContents: string;
+  try {
+    rawContents = await fileSystem.readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+
+  const records = await parsePersistedRecords(rawContents, filePath, fileSystem);
+
+  let importedCount = 0;
+  let skippedExistingCount = 0;
+  for (const record of records) {
+    const existing = await targetRepository.get(record.id);
+    if (existing) {
+      skippedExistingCount++;
+      continue;
+    }
+    await targetRepository.create(record);
+    importedCount++;
+  }
+
+  await fileSystem.rename(filePath, `${filePath}.imported-${Date.now()}`);
+  return { importedCount, skippedExistingCount };
 }
 import fs from "node:fs/promises";
 import path from "node:path";
