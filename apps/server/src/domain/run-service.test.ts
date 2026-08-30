@@ -12,6 +12,7 @@ import {
   configureBillingStore,
   configureBillingEnabled,
   getBillingSummary,
+  listBillingUsage,
 } from "./billing/billing-service.js";
 import { createMemorySessionRepository } from "./session-repository.js";
 import { configureSessionRepository, createSession, getSession } from "./sessions.js";
@@ -119,6 +120,70 @@ test("createRun charges credits, and completing the run does not refund the char
   assert.equal(summary.balance, FREE_GRANT_CREDITS - USAGE_COSTS["prompt"]!);
 });
 
+test("createRun settles the reservation against actual model.usage tokens, refunding the unused portion", async () => {
+  resetState();
+  configureModelGatewayFactory(() =>
+    fakeGatewayEmitting([
+      { type: "message.delta", messageId: "m1", text: "hi" },
+      { type: "model.usage", model: "gpt-4o-mini", inputTokens: 300, outputTokens: 200, totalTokens: 500 },
+    ]),
+  );
+
+  const session = await createSession("club-promo", USER_ID);
+  const run = await createRun(session.id, { kind: "prompt", text: "hi", requestId: "req-1" }, USER_ID);
+  await waitFor(async () => (await getRun(session.id, run.id, USER_ID)).status === "completed");
+
+  const summary = await getBillingSummary(USER_ID);
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - 1);
+
+  const usage = await listBillingUsage(USER_ID);
+  assert.equal(usage.events[0]?.metering, "actual");
+  assert.equal(usage.events[0]?.units, 500);
+  assert.equal(usage.events[0]?.model, "gpt-4o-mini");
+  assert.equal(usage.events[0]?.credits, 1);
+});
+
+test("createRun with no reported model.usage keeps the fixed reservation and marks it estimated", async () => {
+  resetState();
+  configureModelGatewayFactory(() =>
+    fakeGatewayEmitting([{ type: "message.delta", messageId: "m1", text: "hi" }]),
+  );
+
+  const session = await createSession("club-promo", USER_ID);
+  const run = await createRun(session.id, { kind: "prompt", text: "hi", requestId: "req-1" }, USER_ID);
+  await waitFor(async () => (await getRun(session.id, run.id, USER_ID)).status === "completed");
+
+  const usage = await listBillingUsage(USER_ID);
+  assert.equal(usage.events[0]?.metering, "estimated");
+  assert.equal(usage.events[0]?.credits, USAGE_COSTS["prompt"]);
+});
+
+test("createRun fails the run instead of completing it when settling actual usage would overdraw the balance", async () => {
+  resetState();
+  configureModelGatewayFactory(() =>
+    fakeGatewayEmitting([
+      { type: "message.delta", messageId: "m1", text: "hi" },
+      { type: "model.usage", model: "gpt-4o", inputTokens: 900_000, outputTokens: 99_000, totalTokens: 999_000 },
+    ]),
+  );
+
+  const session = await createSession("club-promo", USER_ID);
+  const run = await createRun(session.id, { kind: "prompt", text: "hi", requestId: "req-1" }, USER_ID);
+  await waitFor(async () => (await getRun(session.id, run.id, USER_ID)).status === "failed");
+
+  const failed = await getRun(session.id, run.id, USER_ID);
+  assert.match(failed.error ?? "", /insufficient/i);
+
+  // The reservation was consumed, not refunded: settlement and the cancel/fail
+  // refund path are mutually exclusive.
+  const summary = await getBillingSummary(USER_ID);
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - USAGE_COSTS["prompt"]!);
+
+  // The already-streamed messages remain in the session for audit purposes.
+  const reloaded = await getSession(session.id, USER_ID);
+  assert.ok(reloaded.viewModel.chatMessages.some((message) => message.role === "user"));
+});
+
 test("createRun replaying the same requestId returns the same run instead of starting a second one", async () => {
   resetState();
   configureModelGatewayFactory(() =>
@@ -210,6 +275,32 @@ test("createRun called concurrently with the same requestId never throws and onl
   await waitFor(async () => (await getRun(session.id, first.id, USER_ID)).status === "completed");
   const summary = await getBillingSummary(USER_ID);
   assert.equal(summary.balance, FREE_GRANT_CREDITS - USAGE_COSTS["prompt"]!);
+});
+
+test("createRun refunds the charge when the repository fails to create the run for a reason other than a duplicate", async () => {
+  resetState();
+  configureModelGatewayFactory(() =>
+    fakeGatewayEmitting([{ type: "message.delta", messageId: "m1", text: "hi" }]),
+  );
+
+  const base = createMemoryRunRepository();
+  const brokenCreate: RunRepository = {
+    ...base,
+    async create() {
+      throw new Error("storage unavailable");
+    },
+  };
+  configureRunRepository(brokenCreate);
+
+  const session = await createSession("club-promo", USER_ID);
+
+  await assert.rejects(
+    createRun(session.id, { kind: "prompt", text: "hi", requestId: "req-1" }, USER_ID),
+    /storage unavailable/,
+  );
+
+  const summary = await getBillingSummary(USER_ID);
+  assert.equal(summary.balance, FREE_GRANT_CREDITS);
 });
 
 test("getRun and listRunEvents hide a run whose owner does not match the requester, on an unowned session", async () => {
@@ -313,7 +404,7 @@ test("recoverRunsOnStartup isolates one run's failure from the rest", async () =
   }
 });
 
-test("settling a completed run that raced with a concurrent cancel still ends up cancelled, with a refund", async () => {
+test("settling a completed run that raced with a concurrent cancel still ends up cancelled, without refunding the already-settled reservation", async () => {
   resetState();
   configureModelGatewayFactory(() =>
     fakeGatewayEmitting([{ type: "message.delta", messageId: "m1", text: "hi" }]),
@@ -342,11 +433,54 @@ test("settling a completed run that raced with a concurrent cancel still ends up
   await waitFor(async () => (await getRun(session.id, run.id, USER_ID)).status === "cancelled");
   assert.ok(injectedCancel, "the race must have actually been exercised");
 
+  // The run's usage was already settled (as a no-op reservation, since no
+  // model.usage was ever reported) before the race flipped it to cancelled;
+  // that settlement is final and must not also be refunded.
   const summary = await getBillingSummary(USER_ID);
-  assert.equal(summary.balance, FREE_GRANT_CREDITS);
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - USAGE_COSTS["prompt"]!);
 });
 
-test("executeRun never rejects unhandled: a settlement that keeps conflicting still ends the run and refunds", async () => {
+test("settling a completed run with actual usage that races with a concurrent cancel never double-refunds the settlement", async () => {
+  resetState();
+  configureModelGatewayFactory(() =>
+    fakeGatewayEmitting([
+      { type: "message.delta", messageId: "m1", text: "hi" },
+      { type: "model.usage", model: "gpt-4o-mini", inputTokens: 300, outputTokens: 200, totalTokens: 500 },
+    ]),
+  );
+
+  const base = createMemoryRunRepository();
+  let injectedCancel = false;
+  const racy: RunRepository = {
+    ...base,
+    async complete(id, expectedVersion) {
+      if (!injectedCancel) {
+        injectedCancel = true;
+        await base.requestCancel(id);
+      }
+      return base.complete(id, expectedVersion);
+    },
+  };
+  configureRunRepository(racy);
+
+  const session = await createSession("club-promo", USER_ID);
+  const run = await createRun(session.id, { kind: "prompt", text: "hi", requestId: "req-1" }, USER_ID);
+
+  await waitFor(async () => (await getRun(session.id, run.id, USER_ID)).status === "cancelled");
+  assert.ok(injectedCancel, "the race must have actually been exercised");
+
+  // Settlement reconciled the reservation down to the actual token cost (1
+  // credit); the post-cancel refund path must see that settlement and skip,
+  // never crediting back the full reservation on top of it.
+  const summary = await getBillingSummary(USER_ID);
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - 1);
+
+  const usage = await listBillingUsage(USER_ID);
+  assert.equal(usage.events[0]?.metering, "actual");
+  assert.equal(usage.events[0]?.credits, 1);
+});
+
+test("executeRun never rejects unhandled: a settlement that keeps conflicting still ends the run without a duplicate refund", async () => {
   resetState();
   configureModelGatewayFactory(() =>
     fakeGatewayEmitting([{ type: "message.delta", messageId: "m1", text: "hi" }]),
@@ -372,6 +506,57 @@ test("executeRun never rejects unhandled: a settlement that keeps conflicting st
     const status = (await getRun(session.id, run.id, USER_ID)).status;
     return status === "failed" || status === "cancelled" || status === "completed";
   });
+
+  // The settlement (a no-op reservation, since no model.usage was reported)
+  // already happened before complete() started conflicting; the fallback
+  // must not also refund it once it forces the run to failed.
+  const summary = await getBillingSummary(USER_ID);
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - USAGE_COSTS["prompt"]!);
+});
+
+test("forceFailAfterSettlementFailure refunds in full when settlement never happened before the fallback fired", async () => {
+  resetState();
+  configureModelGatewayFactory(() => ({
+    getProfile: () => ({
+      planning: { model: "test", temperature: 0 },
+      coding: { model: "test", temperature: 0 },
+      review: { model: "test", temperature: 0 },
+      summary: { model: "test", temperature: 0 },
+      title: { model: "test", temperature: 0 },
+    }),
+    // Throwing mid-stream drives settleRun down the terminalError branch,
+    // which never calls settleRunUsage, so no settlement is ever recorded.
+    async *streamPlan() {
+      throw new Error("model gateway exploded");
+    },
+    async *streamCode() {},
+    async summarizeProject() {
+      return "";
+    },
+  }));
+
+  const base = createMemoryRunRepository();
+  // fail() always conflicts, so settleRun's bounded retry budget for the
+  // terminalError branch is exhausted without ever recording a settlement;
+  // forceFailAfterSettlementFailure is the only path left to refund it.
+  let failAttempts = 0;
+  const alwaysConflictingFail: RunRepository = {
+    ...base,
+    async fail(id, expectedVersion, error) {
+      failAttempts += 1;
+      if (failAttempts <= 5) {
+        const { RunVersionConflictError } = await import("./run-repository.js");
+        throw new RunVersionConflictError("always conflicts");
+      }
+      return base.fail(id, expectedVersion, error);
+    },
+  };
+  configureRunRepository(alwaysConflictingFail);
+
+  const session = await createSession("club-promo", USER_ID);
+  const run = await createRun(session.id, { kind: "prompt", text: "hi", requestId: "req-1" }, USER_ID);
+
+  await waitFor(async () => (await getRun(session.id, run.id, USER_ID)).status === "failed");
 
   const summary = await getBillingSummary(USER_ID);
   assert.equal(summary.balance, FREE_GRANT_CREDITS);

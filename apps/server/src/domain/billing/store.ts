@@ -48,6 +48,7 @@ export interface UsageEventInput {
   model?: string;
   sessionId?: string;
   status?: "succeeded" | "refunded";
+  metering?: "actual" | "estimated";
 }
 
 export interface UsageEventDto {
@@ -58,6 +59,7 @@ export interface UsageEventDto {
   model?: string;
   sessionId?: string;
   status: "succeeded" | "refunded";
+  metering: "actual" | "estimated";
   createdAt: string;
 }
 
@@ -81,6 +83,36 @@ export interface DebitAndRecordUsageResult {
   balance: number;
 }
 
+export interface SettleUsageInput {
+  userId: string;
+  /** The run this settlement reconciles; also the settlement's idempotency key. */
+  runId: string;
+  /** The reservation's usage event id, updated in place with the settled totals. */
+  usageEventId: string;
+  reservedCredits: number;
+  finalCredits: number;
+  reason: string;
+  metering: "actual" | "estimated";
+  units?: number;
+  model?: string;
+}
+
+export interface SettleUsageResult {
+  /** False when a settlement for this runId was already recorded (idempotent replay). */
+  applied: boolean;
+  /** False when the final charge exceeded the reservation and the balance could not cover the top-up. */
+  sufficient: boolean;
+  balance: number;
+  /** The credits actually settled to: the reservation when insufficient, finalCredits otherwise. */
+  finalCredits: number;
+}
+
+export interface RunSettlementDto {
+  /** False when the settlement recorded an insufficient top-up. */
+  sufficient: boolean;
+  finalCredits: number;
+}
+
 /** Persistence boundary for billing so the sqlite-backed implementation can be swapped for a fake in tests. */
 export interface BillingStore {
   appendGrant(input: AppendGrantInput): Promise<AppendGrantResult>;
@@ -88,6 +120,10 @@ export interface BillingStore {
   /** Debits credits and records the matching usage event as a single atomic operation. */
   debitAndRecordUsage(input: DebitAndRecordUsageInput): Promise<DebitAndRecordUsageResult>;
   refundDebit(input: RefundDebitInput): Promise<RefundDebitResult>;
+  /** Reconciles a reservation against a final charge. Idempotent per runId. */
+  settleUsage(input: SettleUsageInput): Promise<SettleUsageResult>;
+  /** The persisted record of a run's settlement, or undefined if it was never settled. */
+  getSettlement(runId: string): Promise<RunSettlementDto | undefined>;
   getBalance(userId: string): Promise<number>;
   insertUsageEvent(input: UsageEventInput): Promise<void>;
   markUsageEventRefunded(usageEventId: string): Promise<void>;

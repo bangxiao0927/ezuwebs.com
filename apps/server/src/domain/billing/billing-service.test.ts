@@ -18,6 +18,8 @@ import {
   grantDevCredits,
   listBillingUsage,
   refundUsageCharge,
+  settleRunUsage,
+  SettlementAlreadyAppliedError,
 } from "./billing-service.js";
 
 function resetBilling(): void {
@@ -140,6 +142,115 @@ test("refundUsageCharge rejects refunding a different user's charge", async () =
   const summaryB = await getBillingSummary("user-b");
   assert.equal(summaryA.balance, FREE_GRANT_CREDITS - USAGE_COSTS["prompt"]!);
   assert.equal(summaryB.balance, FREE_GRANT_CREDITS);
+});
+
+test("settleRunUsage refunds the reservation down to the actual token cost and records it as actual", async () => {
+  resetBilling();
+  await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+
+  const result = await settleRunUsage({
+    userId: "user-a",
+    runId: "run-1",
+    requestId: "req-1",
+    usage: { totalTokens: 500, inputTokens: 300, outputTokens: 200, models: ["gpt-4o-mini"] },
+  });
+
+  assert.equal(result.applied, true);
+  assert.equal(result.sufficient, true);
+  assert.equal(result.finalCredits, 1);
+
+  const summary = await getBillingSummary("user-a");
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - 1);
+
+  const page = await listBillingUsage("user-a");
+  assert.equal(page.events[0]?.credits, 1);
+  assert.equal(page.events[0]?.units, 500);
+  assert.equal(page.events[0]?.model, "gpt-4o-mini");
+  assert.equal(page.events[0]?.metering, "actual");
+});
+
+test("settleRunUsage debits the top-up when actual usage exceeds the reservation", async () => {
+  resetBilling();
+  await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+
+  const result = await settleRunUsage({
+    userId: "user-a",
+    runId: "run-1",
+    requestId: "req-1",
+    usage: { totalTokens: 24_500, inputTokens: 20_000, outputTokens: 4_500, models: ["gpt-4o"] },
+  });
+
+  assert.equal(result.sufficient, true);
+  assert.equal(result.finalCredits, 25);
+  const summary = await getBillingSummary("user-a");
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - 25);
+});
+
+test("settleRunUsage without a usage aggregate keeps the fixed reservation and marks it estimated", async () => {
+  resetBilling();
+  await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+
+  const result = await settleRunUsage({ userId: "user-a", runId: "run-1", requestId: "req-1" });
+
+  assert.equal(result.sufficient, true);
+  assert.equal(result.finalCredits, USAGE_COSTS["prompt"]);
+  const summary = await getBillingSummary("user-a");
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - USAGE_COSTS["prompt"]!);
+
+  const page = await listBillingUsage("user-a");
+  assert.equal(page.events[0]?.metering, "estimated");
+});
+
+test("settleRunUsage never overdraws the balance and reports insufficient instead", async () => {
+  resetBilling();
+  const chargesUntilDrained = Math.floor(FREE_GRANT_CREDITS / USAGE_COSTS["prompt"]!);
+  for (let i = 0; i < chargesUntilDrained; i += 1) {
+    await chargeUsage({ userId: "user-a", kind: "prompt", requestId: `req-${i}` });
+  }
+  const lastRequestId = `req-${chargesUntilDrained - 1}`;
+
+  const result = await settleRunUsage({
+    userId: "user-a",
+    runId: "run-drain",
+    requestId: lastRequestId,
+    usage: { totalTokens: 999_000, inputTokens: 900_000, outputTokens: 99_000, models: ["gpt-4o"] },
+  });
+
+  assert.equal(result.sufficient, false);
+  assert.equal(result.finalCredits, USAGE_COSTS["prompt"]);
+});
+
+test("settleRunUsage is idempotent: replaying the same runId does not settle twice", async () => {
+  resetBilling();
+  await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+
+  const usage = { totalTokens: 24_500, inputTokens: 20_000, outputTokens: 4_500, models: ["gpt-4o"] };
+  const first = await settleRunUsage({ userId: "user-a", runId: "run-1", requestId: "req-1", usage });
+  const replay = await settleRunUsage({ userId: "user-a", runId: "run-1", requestId: "req-1", usage });
+
+  assert.equal(first.applied, true);
+  assert.equal(replay.applied, false);
+  const summary = await getBillingSummary("user-a");
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - 25);
+});
+
+test("refundUsageCharge refuses to refund a reservation whose run was already settled", async () => {
+  resetBilling();
+  await chargeUsage({ userId: "user-a", kind: "prompt", requestId: "req-1" });
+  await settleRunUsage({
+    userId: "user-a",
+    runId: "run-1",
+    requestId: "req-1",
+    usage: { totalTokens: 500, inputTokens: 300, outputTokens: 200, models: ["gpt-4o-mini"] },
+  });
+
+  await assert.rejects(
+    refundUsageCharge({ userId: "user-a", kind: "prompt", requestId: "req-1", runId: "run-1", reason: "run cancelled" }),
+    SettlementAlreadyAppliedError,
+  );
+
+  const summary = await getBillingSummary("user-a");
+  assert.equal(summary.balance, FREE_GRANT_CREDITS - 1);
 });
 
 test("chargeUsage rejects replaying a requestId that was already refunded, instead of pretending success", async () => {

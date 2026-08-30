@@ -8,6 +8,7 @@ import {
   RefundConflictError,
   UnknownDevGrantPackageError,
 } from "./store.js";
+import { RESERVATION_CREDITS, creditsForTokens, modelLabelFor, type ModelUsageTotals } from "./pricing.js";
 
 export {
   DevGrantsDisabledError,
@@ -21,7 +22,7 @@ export {
 export const FREE_GRANT_CREDITS = 200;
 
 export const USAGE_COSTS: Record<string, number> = {
-  prompt: 10,
+  prompt: RESERVATION_CREDITS,
   edit: 5,
   retry: 5,
 };
@@ -169,6 +170,12 @@ export interface ChargeUsageInput {
   requestId: string;
   sessionId?: string;
   model?: string;
+  /**
+   * "estimated" marks a reservation pending settleRunUsage (e.g. an agent
+   * run's prompt charge); "actual" (the default) is a flat, known-final
+   * charge that never gets reconciled later.
+   */
+  metering?: "actual" | "estimated";
 }
 
 export interface ChargeUsageResult {
@@ -198,6 +205,7 @@ export async function chargeUsage(input: ChargeUsageInput): Promise<ChargeUsageR
       units: 1,
       credits,
       status: "succeeded",
+      metering: input.metering ?? "actual",
       ...(input.model ? { model: input.model } : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     },
@@ -223,7 +231,17 @@ export interface RefundUsageChargeInput {
   sessionId?: string;
   requestId: string;
   reason: string;
+  /**
+   * The run this charge was reserved for. When given, the refund is refused
+   * once a settlement is recorded for that run: settleRunUsage has already
+   * reconciled the reservation, so a full refund on top of it would credit
+   * the user twice.
+   */
+  runId?: string;
 }
+
+/** A settlement for the refund's runId was already recorded; refusing to also refund the full reservation. */
+export class SettlementAlreadyAppliedError extends Error {}
 
 /**
  * Refunds a previously applied chargeUsage debit and marks its usage event
@@ -232,6 +250,14 @@ export interface RefundUsageChargeInput {
  * ever recorded, so a refund can never manufacture new credits.
  */
 export async function refundUsageCharge(input: RefundUsageChargeInput): Promise<void> {
+  if (input.runId) {
+    const settlement = await billingStore.getSettlement(input.runId);
+    if (settlement) {
+      throw new SettlementAlreadyAppliedError(
+        `Run ${input.runId} was already settled; refusing to also refund its reservation`,
+      );
+    }
+  }
   const credits = USAGE_COSTS[input.kind] ?? 0;
   const debitIdempotencyKey = debitIdempotencyKeyFor(input);
   const usageEventId = usageEventIdFor(input);
@@ -251,4 +277,59 @@ export async function refundUsageCharge(input: RefundUsageChargeInput): Promise<
     debitIdempotencyKey,
   });
   await billingStore.markUsageEventRefunded(usageEventId);
+}
+
+export interface SettleRunUsageInput {
+  userId: string;
+  /** The run being settled; also the settlement's idempotency key. */
+  runId: string;
+  sessionId?: string;
+  /** The requestId chargeUsage originally reserved credits against. */
+  requestId: string;
+  /** Aggregated model.usage totals for the run; undefined when the run never reported real usage. */
+  usage?: ModelUsageTotals;
+}
+
+export interface SettleRunUsageResult {
+  /** False when this runId was already settled (idempotent replay). */
+  applied: boolean;
+  /** False when actual usage exceeded the reservation and the balance could not cover the top-up. */
+  sufficient: boolean;
+  balance: number;
+  finalCredits: number;
+}
+
+/**
+ * Reconciles a run's fixed "prompt" reservation against its actual model
+ * usage: refunds the difference when usage came in under the reservation,
+ * debits the difference when it exceeded it, and never overdraws the
+ * balance. A run with no reported usage (e.g. a stub gateway) keeps the
+ * reservation as-is and is recorded as "estimated", never "actual".
+ */
+export async function settleRunUsage(input: SettleRunUsageInput): Promise<SettleRunUsageResult> {
+  const reservedCredits = USAGE_COSTS["prompt"] ?? RESERVATION_CREDITS;
+  const keyInput: UsageChargeKeyInput = {
+    userId: input.userId,
+    kind: "prompt",
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    requestId: input.requestId,
+  };
+  const usageEventId = usageEventIdFor(keyInput);
+
+  const finalCredits = input.usage ? creditsForTokens(input.usage.totalTokens) : reservedCredits;
+  const metering = input.usage ? "actual" : "estimated";
+  const model = input.usage ? modelLabelFor(input.usage.models) : undefined;
+  const units = input.usage ? input.usage.totalTokens : undefined;
+
+  return billingStore.settleUsage({
+    userId: input.userId,
+    runId: input.runId,
+    usageEventId,
+    reservedCredits,
+    finalCredits,
+    metering,
+    reason: "usage settlement: prompt",
+    ...(units !== undefined ? { units } : {}),
+    ...(model !== undefined ? { model } : {}),
+  });
 }

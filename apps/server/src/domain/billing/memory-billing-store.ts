@@ -9,6 +9,9 @@ import type {
   ListUsageEventsResult,
   RefundDebitInput,
   RefundDebitResult,
+  RunSettlementDto,
+  SettleUsageInput,
+  SettleUsageResult,
   UsageEventInput,
 } from "./store.js";
 
@@ -27,6 +30,7 @@ interface UsageRow {
   model?: string;
   sessionId?: string;
   status: "succeeded" | "refunded";
+  metering: "actual" | "estimated";
   createdAt: string;
 }
 
@@ -34,6 +38,7 @@ export function createMemoryBillingStore(): BillingStore {
   const ledger: LedgerRow[] = [];
   const usage: UsageRow[] = [];
   const idempotencyKeys = new Set<string>();
+  const settlements = new Map<string, RunSettlementDto>();
 
   function balanceFor(userId: string): number {
     return ledger
@@ -54,6 +59,7 @@ export function createMemoryBillingStore(): BillingStore {
       ...(input.model ? { model: input.model } : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       status: input.status ?? "succeeded",
+      metering: input.metering ?? "actual",
       createdAt: new Date().toISOString(),
     });
   }
@@ -103,6 +109,48 @@ export function createMemoryBillingStore(): BillingStore {
       idempotencyKeys.add(idempotencyKey);
       ledger.push({ userId: input.userId, amount: input.credits, idempotencyKey });
       return { applied: true, balance: balanceFor(input.userId) };
+    },
+
+    async settleUsage(input: SettleUsageInput): Promise<SettleUsageResult> {
+      const existing = settlements.get(input.runId);
+      if (existing) {
+        return {
+          applied: false,
+          sufficient: existing.sufficient,
+          balance: balanceFor(input.userId),
+          finalCredits: existing.finalCredits,
+        };
+      }
+
+      const difference = input.finalCredits - input.reservedCredits;
+      const balance = balanceFor(input.userId);
+      if (difference > 0 && balance < difference) {
+        settlements.set(input.runId, { sufficient: false, finalCredits: input.reservedCredits });
+        return { applied: true, sufficient: false, balance, finalCredits: input.reservedCredits };
+      }
+
+      settlements.set(input.runId, { sufficient: true, finalCredits: input.finalCredits });
+      if (difference !== 0) {
+        ledger.push({
+          userId: input.userId,
+          amount: -difference,
+          idempotencyKey: `settle:${input.runId}`,
+        });
+      }
+
+      const row = usage.find((candidate) => candidate.id === input.usageEventId);
+      if (row) {
+        row.credits = input.finalCredits;
+        row.metering = input.metering;
+        if (input.units !== undefined) row.units = input.units;
+        if (input.model !== undefined) row.model = input.model;
+      }
+
+      return { applied: true, sufficient: true, balance: balanceFor(input.userId), finalCredits: input.finalCredits };
+    },
+
+    async getSettlement(runId: string): Promise<RunSettlementDto | undefined> {
+      return settlements.get(runId);
     },
 
     async getBalance(userId: string): Promise<number> {

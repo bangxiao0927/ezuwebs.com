@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 
 import { getBillingSummary, getUsage } from "../api";
+import { promptUsageLabel } from "../lib/usageDisplay";
 import { hasNextPage, nextOffset, previousOffset } from "../lib/usagePagination";
 import { navigateHome, navigateToCredits, navigateToDashboard } from "../router";
 import type { BillingSummary, UsagePage } from "../types";
@@ -71,6 +72,9 @@ function previousPage(): void {
         <article v-for="event in usage.events" :key="event.id" class="dashboard-project-card usage-event-card">
           <span class="dashboard-project-title">{{ event.kind }}</span>
           <span class="dashboard-project-name">{{ event.credits }} credits</span>
+          <span class="dashboard-project-description" v-if="event.kind === 'prompt'">
+            {{ promptUsageLabel(event) }}
+          </span>
           <span class="dashboard-project-description" v-if="event.model">Model: {{ event.model }}</span>
           <span class="dashboard-project-meta">{{ event.createdAt }}</span>
         </article>

@@ -75,6 +75,9 @@ export const usageEvents = sqliteTable(
     model: text("model"),
     sessionId: text("session_id"),
     status: text("status", { enum: ["succeeded", "refunded"] }).notNull().default("succeeded"),
+    // "estimated" for a reservation pending settlement; "actual" once settled
+    // from real model.usage tokens (or recorded directly from a flat-cost charge).
+    metering: text("metering", { enum: ["actual", "estimated"] }).notNull().default("actual"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (table) => [index("usage_events_user_id_idx").on(table.userId)],
@@ -82,6 +85,20 @@ export const usageEvents = sqliteTable(
 
 export type CreditLedgerEntry = typeof creditLedger.$inferSelect;
 export type UsageEvent = typeof usageEvents.$inferSelect;
+
+export const usageSettlements = sqliteTable("usage_settlements", {
+  // The run id this settlement reconciles; also the idempotency key, so
+  // replaying a settlement for the same run is always a no-op.
+  runId: text("run_id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  usageEventId: text("usage_event_id").notNull(),
+  reservedCredits: integer("reserved_credits").notNull(),
+  finalCredits: integer("final_credits").notNull(),
+  status: text("status", { enum: ["settled", "insufficient"] }).notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export type UsageSettlement = typeof usageSettlements.$inferSelect;
 
 export const sessions = sqliteTable(
   "sessions",

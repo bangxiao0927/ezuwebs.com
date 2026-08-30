@@ -1,7 +1,7 @@
 import { desc, eq, sql } from "drizzle-orm";
 
 import type { EzuDb } from "./client.js";
-import { creditLedger, usageEvents, type UsageEvent } from "./schema.js";
+import { creditLedger, usageEvents, usageSettlements, type UsageEvent } from "./schema.js";
 
 export type LedgerEntryType = "grant" | "debit" | "refund";
 
@@ -193,6 +193,7 @@ export function debitAndRecordUsage(
         model: input.usageEvent.model ?? null,
         sessionId: input.usageEvent.sessionId ?? null,
         status: input.usageEvent.status ?? "succeeded",
+        metering: input.usageEvent.metering ?? "actual",
         createdAt: new Date(),
       })
       .onConflictDoNothing()
@@ -211,6 +212,7 @@ export interface InsertUsageEventInput {
   model?: string;
   sessionId?: string;
   status?: "succeeded" | "refunded";
+  metering?: "actual" | "estimated";
 }
 
 /** Inserts a usage event. Replaying the same `id` is a no-op. */
@@ -225,6 +227,7 @@ export function insertUsageEvent(db: EzuDb, input: InsertUsageEventInput): void 
       model: input.model ?? null,
       sessionId: input.sessionId ?? null,
       status: input.status ?? "succeeded",
+      metering: input.metering ?? "actual",
       createdAt: new Date(),
     })
     .onConflictDoNothing()
@@ -279,4 +282,141 @@ export function listUsageEvents(
     total: aggregate?.total ?? 0,
     totalCreditsConsumed: aggregate?.totalCreditsConsumed ?? 0,
   };
+}
+
+export interface SettleUsageInput {
+  userId: string;
+  /** The run this settlement reconciles; also the settlement's idempotency key. */
+  runId: string;
+  /** The reservation's usage event id, updated in place with the settled totals. */
+  usageEventId: string;
+  reservedCredits: number;
+  finalCredits: number;
+  reason: string;
+  metering: "actual" | "estimated";
+  /** Overwrites the usage event's units (e.g. actual total tokens) when provided. */
+  units?: number;
+  /** Overwrites the usage event's model label when provided. */
+  model?: string;
+}
+
+export interface SettleUsageResult {
+  /** False when a settlement for this runId was already recorded (idempotent replay). */
+  applied: boolean;
+  /** False when finalCredits exceeded reservedCredits and the balance could not cover the top-up. */
+  sufficient: boolean;
+  balance: number;
+  /** The credits actually settled to: reservedCredits when insufficient, finalCredits otherwise. */
+  finalCredits: number;
+}
+
+/**
+ * Reconciles a reservation against the final credits owed, in one
+ * transaction: refunds the difference when the final charge is lower,
+ * debits it when higher, and updates the reservation's usage event with the
+ * settled totals. Never overdraws the balance: when the top-up would, the
+ * reservation is kept as the final charge and `sufficient` is false.
+ * Replaying the same runId is a no-op that reports the prior outcome.
+ */
+export function settleUsage(db: EzuDb, input: SettleUsageInput): SettleUsageResult {
+  return db.transaction((tx) => {
+    const existing = tx
+      .select()
+      .from(usageSettlements)
+      .where(eq(usageSettlements.runId, input.runId))
+      .get();
+    if (existing) {
+      return {
+        applied: false,
+        sufficient: existing.status === "settled",
+        balance: ledgerBalance(tx, input.userId),
+        finalCredits: existing.finalCredits,
+      };
+    }
+
+    const difference = input.finalCredits - input.reservedCredits;
+    let balance = ledgerBalance(tx, input.userId);
+
+    if (difference > 0 && balance < difference) {
+      tx.insert(usageSettlements)
+        .values({
+          runId: input.runId,
+          userId: input.userId,
+          usageEventId: input.usageEventId,
+          reservedCredits: input.reservedCredits,
+          finalCredits: input.reservedCredits,
+          status: "insufficient",
+          createdAt: new Date(),
+        })
+        .run();
+      return { applied: true, sufficient: false, balance, finalCredits: input.reservedCredits };
+    }
+
+    if (difference > 0) {
+      tx.insert(creditLedger)
+        .values({
+          id: crypto.randomUUID(),
+          userId: input.userId,
+          type: "debit",
+          amount: -difference,
+          reason: input.reason,
+          idempotencyKey: `settle-debit:${input.runId}`,
+          createdAt: new Date(),
+        })
+        .run();
+      balance -= difference;
+    } else if (difference < 0) {
+      tx.insert(creditLedger)
+        .values({
+          id: crypto.randomUUID(),
+          userId: input.userId,
+          type: "refund",
+          amount: -difference,
+          reason: input.reason,
+          idempotencyKey: `settle-refund:${input.runId}`,
+          createdAt: new Date(),
+        })
+        .run();
+      balance -= difference;
+    }
+
+    tx.update(usageEvents)
+      .set({
+        credits: input.finalCredits,
+        metering: input.metering,
+        ...(input.units !== undefined ? { units: input.units } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+      })
+      .where(eq(usageEvents.id, input.usageEventId))
+      .run();
+
+    tx.insert(usageSettlements)
+      .values({
+        runId: input.runId,
+        userId: input.userId,
+        usageEventId: input.usageEventId,
+        reservedCredits: input.reservedCredits,
+        finalCredits: input.finalCredits,
+        status: "settled",
+        createdAt: new Date(),
+      })
+      .run();
+
+    return { applied: true, sufficient: true, balance, finalCredits: input.finalCredits };
+  });
+}
+
+export interface RunSettlementDto {
+  /** Always true: getSettlement returns undefined when no settlement was ever recorded. */
+  applied: true;
+  /** False when the settlement recorded an insufficient top-up. */
+  sufficient: boolean;
+  finalCredits: number;
+}
+
+/** The persisted record of a run's settlement, or undefined if it was never settled. */
+export function getSettlement(db: EzuDb, runId: string): RunSettlementDto | undefined {
+  const row = db.select().from(usageSettlements).where(eq(usageSettlements.runId, runId)).get();
+  if (!row) return undefined;
+  return { applied: true, sufficient: row.status === "settled", finalCredits: row.finalCredits };
 }

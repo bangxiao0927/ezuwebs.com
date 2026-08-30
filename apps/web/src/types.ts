@@ -175,6 +175,12 @@ export interface UsageEvent {
   credits: number;
   model?: string;
   sessionId?: string;
+  /**
+   * "estimated" is a fixed reservation pending settlement, not a measured
+   * token count; only "actual" reflects real model.usage tokens. The UI must
+   * never present an estimated event as if it were actual.
+   */
+  metering: "actual" | "estimated";
   createdAt: string;
 }
 

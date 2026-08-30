@@ -11,6 +11,9 @@ import type {
   ListUsageEventsResult,
   RefundDebitInput,
   RefundDebitResult,
+  RunSettlementDto,
+  SettleUsageInput,
+  SettleUsageResult,
   UsageEventDto,
   UsageEventInput,
 } from "./store.js";
@@ -24,6 +27,7 @@ function toUsageEventDto(event: UsageEvent): UsageEventDto {
     ...(event.model ? { model: event.model } : {}),
     ...(event.sessionId ? { sessionId: event.sessionId } : {}),
     status: event.status,
+    metering: event.metering,
     createdAt: event.createdAt.toISOString(),
   };
 }
@@ -95,6 +99,16 @@ export function createSqliteBillingStore(options: OpenDatabaseOptions = {}): Bil
     async markUsageEventRefunded(usageEventId: string): Promise<void> {
       const [db, { markUsageEventRefunded }] = await Promise.all([getDb(), import("@ezu/db")]);
       markUsageEventRefunded(db, usageEventId);
+    },
+
+    async settleUsage(input: SettleUsageInput): Promise<SettleUsageResult> {
+      const [db, { settleUsage }] = await Promise.all([getDb(), import("@ezu/db")]);
+      return settleUsage(db, input);
+    },
+
+    async getSettlement(runId: string): Promise<RunSettlementDto | undefined> {
+      const [db, { getSettlement }] = await Promise.all([getDb(), import("@ezu/db")]);
+      return getSettlement(db, runId);
     },
 
     async getUsageEventStatus(usageEventId: string): Promise<"succeeded" | "refunded" | undefined> {

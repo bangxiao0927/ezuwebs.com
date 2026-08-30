@@ -161,6 +161,13 @@ function connectToRun(run: RunDto): void {
     onReconnecting: () => {
       runConnectionState.value = "reconnecting";
     },
+    onError: (error) => {
+      disconnectRunStream();
+      flashToast(error.message || "Lost connection to the run.");
+      activeRun.value = undefined;
+      runConnectionState.value = "live";
+      runStream.value = createRunStreamState();
+    },
   });
 }
 

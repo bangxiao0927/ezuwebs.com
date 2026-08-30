@@ -5,8 +5,10 @@ import {
   chargeUsage,
   isBillingEnabled,
   refundUsageCharge,
+  settleRunUsage,
   MissingIdempotencyKeyError,
 } from "./billing/billing-service.js";
+import { aggregateModelUsage } from "./billing/pricing.js";
 import {
   createMemoryRunRepository,
   RunAlreadyExistsError,
@@ -109,6 +111,7 @@ export async function createRun(
       kind: "prompt",
       sessionId,
       requestId: input.requestId ?? "",
+      metering: "estimated",
     });
     if (!charge.applied) {
       const existing = await runRepository.get(runId);
@@ -136,6 +139,18 @@ export async function createRun(
       if (existing) {
         return toRunDto(existing, await lastEventSeqFor(runId));
       }
+    } else if (shouldCharge) {
+      // The charge succeeded but the run it was reserved for was never
+      // created, so nothing will ever settle or refund it otherwise.
+      // refundUsageCharge is idempotent per requestId, so a retried
+      // createRun that fails again here never double-refunds.
+      await refundUsageCharge({
+        userId: requestingUserId!,
+        kind: "prompt",
+        sessionId,
+        requestId: input.requestId ?? "",
+        reason: "run creation failed",
+      }).catch(() => undefined);
     }
     throw error;
   }
@@ -247,14 +262,15 @@ export async function cancelRun(
 // RunVersionConflictError up through the background execution promise.
 const MAX_SETTLE_ATTEMPTS = 5;
 
-async function settleRun(run: RunRecord, terminalError: unknown): Promise<void> {
-  const shouldRefund =
+async function settleRun(run: RunRecord, terminalError: unknown, emittedEvents: AgentEvent[]): Promise<void> {
+  const hasChargedReservation =
     isBillingEnabled() &&
     Boolean(run.userId) &&
     typeof (run.input as { requestId?: string } | undefined)?.requestId === "string";
   const requestId = (run.input as { requestId?: string }).requestId ?? "";
 
   let cancelRequested = run.cancelRequested;
+  let settlement: Awaited<ReturnType<typeof settleRunUsage>> | undefined;
   for (let attempt = 1; attempt <= MAX_SETTLE_ATTEMPTS; attempt++) {
     const current = await runRepository.get(run.id);
     if (!current) return;
@@ -267,7 +283,23 @@ async function settleRun(run: RunRecord, terminalError: unknown): Promise<void> 
         const message = terminalError instanceof Error ? terminalError.message : String(terminalError);
         await runRepository.fail(run.id, current.version, message);
       } else {
-        await runRepository.complete(run.id, current.version);
+        // Settle the reservation against actual usage before the run can
+        // claim success, so an insufficient balance never completes a run.
+        if (hasChargedReservation) {
+          const usage = aggregateModelUsage(emittedEvents);
+          settlement ??= await settleRunUsage({
+            userId: run.userId!,
+            runId: run.id,
+            sessionId: run.sessionId,
+            requestId,
+            ...(usage ? { usage } : {}),
+          });
+        }
+        if (settlement && !settlement.sufficient) {
+          await runRepository.fail(run.id, current.version, "Insufficient credits to settle usage charge");
+        } else {
+          await runRepository.complete(run.id, current.version);
+        }
       }
       break;
     } catch (error) {
@@ -277,12 +309,16 @@ async function settleRun(run: RunRecord, terminalError: unknown): Promise<void> 
     }
   }
 
-  if (shouldRefund && (cancelRequested || terminalError)) {
+  // A cancel/fail can still race in after settlement already ran above (see
+  // the version-conflict retry in the loop); refundUsageCharge checks for a
+  // recorded settlement itself and refuses to also refund it.
+  if (hasChargedReservation && (cancelRequested || terminalError)) {
     await refundUsageCharge({
       userId: run.userId!,
       kind: "prompt",
       sessionId: run.sessionId,
       requestId,
+      runId: run.id,
       reason: cancelRequested ? "run cancelled" : "run failed",
     }).catch(() => undefined);
   }
@@ -306,6 +342,7 @@ async function forceFailAfterSettlementFailure(run: RunRecord): Promise<void> {
       kind: "prompt",
       sessionId: run.sessionId,
       requestId,
+      runId: run.id,
       reason: "run settlement failed",
     }).catch(() => undefined);
   }
@@ -355,7 +392,7 @@ async function executeRun(runId: string): Promise<void> {
     }
 
     await appendSessionEvents(claimed.sessionId, emittedEvents, claimed.userId).catch(() => undefined);
-    await settleRun(claimed, terminalError);
+    await settleRun(claimed, terminalError, emittedEvents);
   } catch (error) {
     // This background promise is started with `void`; nothing awaits it, so
     // any error must be handled here rather than becoming an unhandled
@@ -381,6 +418,7 @@ async function failInterruptedRun(run: RunRecord): Promise<void> {
       kind: "prompt",
       sessionId: run.sessionId,
       requestId,
+      runId: run.id,
       reason: "run interrupted by restart",
     }).catch(() => undefined);
   }
