@@ -35,3 +35,27 @@ test("parseAgentEvent accepts a session.lifecycle event", () => {
 
   assert.equal(event.type, "session.lifecycle");
 });
+
+test("parseAgentEvent accepts a model.usage event", () => {
+  const event = parseAgentEvent({
+    type: "model.usage",
+    model: "gpt-4o",
+    inputTokens: 120,
+    outputTokens: 45,
+    totalTokens: 165,
+  });
+
+  assert.equal(event.type, "model.usage");
+});
+
+test("parseAgentEvent rejects a model.usage event with negative tokens", () => {
+  assert.throws(() =>
+    parseAgentEvent({
+      type: "model.usage",
+      model: "gpt-4o",
+      inputTokens: -1,
+      outputTokens: 0,
+      totalTokens: 0,
+    }),
+  );
+});

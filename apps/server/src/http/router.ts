@@ -34,6 +34,13 @@ import {
   SessionRowMissingError,
   SessionSaveConflictError,
 } from "../domain/sqlite-session-repository.js";
+import {
+  cancelRun,
+  createRun,
+  getRun,
+  listRunEvents,
+  RunNotFoundError,
+} from "../domain/run-service.js";
 
 type Handler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
@@ -54,6 +61,61 @@ function sendJsonWithCors(
     ...corsHeaders(allowedOrigin),
   });
   response.end(body);
+}
+
+const RUN_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const SSE_POLL_INTERVAL_MS = 250;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Streams run events as SSE: replays everything after `afterSeq`, then keeps
+ * polling for new events until the run reaches a terminal status and every
+ * event up to that point has been sent. Polling (rather than a live
+ * subscription that starts after replay) means there is no window in which
+ * an event appended between "replay" and "subscribe" could be missed.
+ */
+async function streamRunEvents(
+  request: IncomingMessage,
+  response: ServerResponse,
+  allowedOrigin: string | undefined,
+  sessionId: string,
+  runId: string,
+  afterSeq: number,
+  requestingUserId: string | undefined,
+): Promise<void> {
+  response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    ...corsHeaders(allowedOrigin),
+  });
+
+  let cursor = afterSeq;
+  let clientDisconnected = false;
+  request.on("close", () => {
+    clientDisconnected = true;
+  });
+
+  while (!clientDisconnected) {
+    const events = await listRunEvents(sessionId, runId, cursor, requestingUserId);
+    for (const entry of events) {
+      response.write(`id: ${entry.seq}\nevent: agent\ndata: ${JSON.stringify(entry.event)}\n\n`);
+      cursor = entry.seq;
+    }
+
+    const run = await getRun(sessionId, runId, requestingUserId);
+    if (RUN_TERMINAL_STATUSES.has(run.status) && cursor >= run.lastEventSeq) {
+      break;
+    }
+    if (clientDisconnected) break;
+    response.write(`: heartbeat\n\n`);
+    await sleep(SSE_POLL_INTERVAL_MS);
+  }
+
+  response.end();
 }
 
 export interface CreateApiHandlerOptions {
@@ -125,6 +187,7 @@ function errorStatus(error: unknown): number {
   if (error instanceof MissingIdempotencyKeyError) return 400;
   if (error instanceof PreviousAttemptFailedError) return 409;
   if (error instanceof RefundConflictError) return 409;
+  if (error instanceof RunNotFoundError) return 404;
   return 500;
 }
 
@@ -379,6 +442,68 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
           }
           const session = await retryAction(sessionId, actionId, billedCurrentUserId, requestId);
           sendJson(response, 200, { session });
+          return;
+        }
+
+        if (action === "runs" && !segments[4] && method === "POST") {
+          const body = await readJsonBody<{ kind?: string; text?: string; requestId?: string }>(request);
+          const text = (body.text ?? "").trim();
+          if (!text) {
+            sendJson(response, 400, { error: "Prompt text is required" } satisfies JsonError);
+            return;
+          }
+          const billedCurrentUserId = await resolveCurrentUserIdForBilledAction(request, options);
+          if (isBillingEnabled() && !billedCurrentUserId) {
+            sendJson(response, 401, { error: "Authentication required" } satisfies JsonError);
+            return;
+          }
+          const requestId = resolveRequestId(request, body);
+          if (isBillingEnabled() && billedCurrentUserId && !requestId) {
+            sendJson(response, 400, {
+              error: "An Idempotency-Key header or requestId is required",
+            } satisfies JsonError);
+            return;
+          }
+          const run = await createRun(
+            sessionId,
+            { kind: "prompt", text, ...(requestId ? { requestId } : {}) },
+            billedCurrentUserId,
+          );
+          sendJson(response, 202, { run });
+          return;
+        }
+
+        if (action === "runs" && segments[4] && !segments[5] && method === "GET") {
+          const runId = decodeURIComponent(segments[4]!);
+          const run = await getRun(sessionId, runId, currentUserId);
+          sendJson(response, 200, { run });
+          return;
+        }
+
+        if (action === "runs" && segments[4] && segments[5] === "events" && method === "GET") {
+          const runId = decodeURIComponent(segments[4]!);
+          const afterSeqParam = url.searchParams.get("afterSeq");
+          const afterSeq = afterSeqParam === null ? 0 : Number(afterSeqParam);
+          if (!Number.isInteger(afterSeq) || afterSeq < 0) {
+            sendJson(response, 400, { error: "afterSeq must be a non-negative integer" } satisfies JsonError);
+            return;
+          }
+          // Ownership check up front: a stream that fails mid-flight cannot
+          // change its response status once headers are already written.
+          await getRun(sessionId, runId, currentUserId);
+          await streamRunEvents(request, response, allowedOrigin, sessionId, runId, afterSeq, currentUserId);
+          return;
+        }
+
+        if (action === "runs" && segments[4] && segments[5] === "cancel" && method === "POST") {
+          const runId = decodeURIComponent(segments[4]!);
+          const billedCurrentUserId = await resolveCurrentUserIdForBilledAction(request, options);
+          if (isBillingEnabled() && !billedCurrentUserId) {
+            sendJson(response, 401, { error: "Authentication required" } satisfies JsonError);
+            return;
+          }
+          const run = await cancelRun(sessionId, runId, billedCurrentUserId);
+          sendJson(response, 200, { run });
           return;
         }
       }

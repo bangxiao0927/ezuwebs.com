@@ -11,6 +11,9 @@ import {
 } from "./domain/session-repository.js";
 import { configureSessionRepository, recoverSessionsOnStartup } from "./domain/sessions.js";
 import { createSqliteSessionRepository } from "./domain/sqlite-session-repository.js";
+import { createSqliteRunRepository } from "./domain/sqlite-run-repository.js";
+import { configureRunRepository, recoverRunsOnStartup } from "./domain/run-service.js";
+import { createMemoryRunRepository, type RunRepository } from "./domain/run-repository.js";
 import { createApiHandler } from "./http/router.js";
 
 const port = Number.parseInt(process.env.PORT ?? "4175", 10);
@@ -46,8 +49,20 @@ async function createConfiguredSessionRepository(): Promise<SessionRepository> {
   return repository;
 }
 
+function createConfiguredRunRepository(): RunRepository {
+  const mode = process.env.SESSION_REPOSITORY ?? "sqlite";
+  if (mode === "memory" || mode === "json") {
+    // The "json" legacy session store has no equivalent for runs; runs are a
+    // new resource, so they fall back to an in-process memory repository.
+    return createMemoryRunRepository();
+  }
+  const databaseUrl = process.env.DATABASE_URL;
+  return createSqliteRunRepository(databaseUrl ? { databaseUrl } : {});
+}
+
 const sessionRepository = await createConfiguredSessionRepository();
 configureSessionRepository(sessionRepository);
+configureRunRepository(createConfiguredRunRepository());
 configureBillingStore(createSqliteBillingStore());
 configureBillingEnabled(resolveBillingEnabled(process.env));
 
@@ -57,9 +72,10 @@ const server = createServer((request, response) => {
 });
 
 recoverSessionsOnStartup()
+  .then(() => recoverRunsOnStartup())
   .catch((error: unknown) => {
     // eslint-disable-next-line no-console
-    console.error("[ezu/server] Failed to recover interrupted sessions on startup:", error);
+    console.error("[ezu/server] Failed to recover interrupted sessions or runs on startup:", error);
   })
   .finally(() => {
     server.listen(port, host, () => {

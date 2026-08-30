@@ -150,3 +150,44 @@ export const workspaceBaselines = sqliteTable("workspace_baselines", {
 });
 
 export type WorkspaceBaselineRow = typeof workspaceBaselines.$inferSelect;
+
+export const agentRuns = sqliteTable(
+  "agent_runs",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id").notNull().references(() => sessions.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    status: text("status", {
+      enum: ["queued", "running", "completed", "failed", "cancelled"],
+    })
+      .notNull()
+      .default("queued"),
+    inputJson: text("input_json").notNull(),
+    error: text("error"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    cancelRequested: integer("cancel_requested", { mode: "boolean" }).notNull().default(false),
+    version: integer("version").notNull().default(1),
+  },
+  (table) => [index("agent_runs_session_id_idx").on(table.sessionId)],
+);
+
+export const runEvents = sqliteTable(
+  "run_events",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    eventJson: text("event_json").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("run_events_run_seq_unique").on(table.runId, table.seq),
+    index("run_events_run_id_idx").on(table.runId),
+  ],
+);
+
+export type AgentRunRow = typeof agentRuns.$inferSelect;
+export type RunEventRow = typeof runEvents.$inferSelect;

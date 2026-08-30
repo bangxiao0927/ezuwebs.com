@@ -43,6 +43,13 @@
       "when": 1788048108100,
       "tag": "0005_big_omega_flight",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788052693637,
+      "tag": "0006_round_power_man",
+      "breakpoints": true
     }
   ]
 }

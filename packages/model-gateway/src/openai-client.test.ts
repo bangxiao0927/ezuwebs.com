@@ -117,6 +117,61 @@ test("createOpenAIClient accepts a base URL ending in /v1 and parses a final SSE
   }
 });
 
+test("streamChat requests usage accounting via stream_options.include_usage", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, unknown> = {};
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body));
+    return createStreamingResponse(["data: [DONE]\n"]);
+  };
+
+  try {
+    const client = createOpenAIClient({ apiKey: "test-key", baseUrl: "https://example.test" });
+    for await (const _chunk of client.streamChat({
+      model: "test-model",
+      temperature: 0,
+      messages: [{ role: "user", content: "hi" }],
+    })) {
+      // Drain.
+    }
+
+    assert.deepEqual(requestBody["stream_options"], { include_usage: true });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("streamChat surfaces usage from a terminal frame with no choices", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    createStreamingResponse([
+      toSse("hi"),
+      `data: ${JSON.stringify({
+        choices: [],
+        usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
+      })}\n`,
+      "data: [DONE]\n",
+    ]);
+
+  try {
+    const client = createOpenAIClient({ apiKey: "test-key", baseUrl: "https://example.test" });
+    const chunks = [];
+    for await (const chunk of client.streamChat({
+      model: "test-model",
+      temperature: 0,
+      messages: [{ role: "user", content: "hi" }],
+    })) {
+      chunks.push(chunk);
+    }
+
+    const usageChunk = chunks.find((chunk) => chunk.usage);
+    assert.ok(usageChunk, "expected a chunk carrying usage");
+    assert.deepEqual(usageChunk.usage, { promptTokens: 12, completionTokens: 8, totalTokens: 20 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("createOpenAIClient does not duplicate an existing chat completions path", async () => {
   const originalFetch = globalThis.fetch;
   let requestedUrl = "";
@@ -185,6 +240,66 @@ test("createRealModelGateway parses pretty-printed JSON from streamed model outp
     assert.equal(planEvent.plan[0]?.id, "step-1");
     assert.equal(planEvent.plan[0]?.title, "Update the page");
     assert.equal(events.at(-1)?.type, "message.completed");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("createRealModelGateway emits a model.usage event when the response carries usage", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    createStreamingResponse([
+      toSse(`\`\`\`json\n${JSON.stringify({ plan: [{ id: "step-1", title: "Do it", status: "pending" }], interaction: null })}\n\`\`\``),
+      `data: ${JSON.stringify({
+        choices: [],
+        usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
+      })}\n`,
+      "data: [DONE]\n",
+    ]);
+
+  try {
+    const gateway = createRealModelGateway({
+      clientConfig: { apiKey: "test-key", baseUrl: "https://example.test" },
+      profile: { planning: { model: "gpt-4o-test", temperature: 0.2 } } as never,
+    });
+    const events = [];
+    for await (const event of gateway.streamPlan({ prompt: "Do it" })) {
+      events.push(event);
+    }
+
+    const usageEvent = events.find((event) => event.type === "model.usage");
+    assert.ok(usageEvent, "expected a model.usage event");
+    assert.deepEqual(usageEvent, {
+      type: "model.usage",
+      model: "gpt-4o-test",
+      inputTokens: 30,
+      outputTokens: 10,
+      totalTokens: 40,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("createRealModelGateway forwards an AbortSignal from PlannerInput to the underlying fetch", async () => {
+  const originalFetch = globalThis.fetch;
+  let forwardedSignal: AbortSignal | undefined;
+  globalThis.fetch = async (_input, init) => {
+    forwardedSignal = init?.signal as AbortSignal | undefined;
+    return createStreamingResponse(["data: [DONE]\n"]);
+  };
+
+  try {
+    const gateway = createRealModelGateway({
+      clientConfig: { apiKey: "test-key", baseUrl: "https://example.test" },
+    });
+    const controller = new AbortController();
+    for await (const _event of gateway.streamPlan({ prompt: "Do it", signal: controller.signal })) {
+      // Drain.
+    }
+
+    assert.ok(forwardedSignal, "expected the request to carry a signal");
+    assert.equal(forwardedSignal?.aborted, false);
   } finally {
     globalThis.fetch = originalFetch;
   }

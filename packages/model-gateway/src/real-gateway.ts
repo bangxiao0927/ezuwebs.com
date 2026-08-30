@@ -150,6 +150,17 @@ function structuredOutputWarning(
   return `[warning] The model response did not contain valid structured ${outputName}. Please retry.`;
 }
 
+function usageEventFor(model: string, chunk: ChatCompletionChunk): AgentEvent | undefined {
+  if (!chunk.usage) return undefined;
+  return {
+    type: "model.usage",
+    model,
+    inputTokens: chunk.usage.promptTokens,
+    outputTokens: chunk.usage.completionTokens,
+    totalTokens: chunk.usage.totalTokens,
+  };
+}
+
 export function createRealModelGateway(options: RealModelGatewayOptions): ModelGateway {
   const client = createOpenAIClient(options.clientConfig);
   const {
@@ -170,12 +181,14 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
       const messageId = crypto.randomUUID();
       let fullText = "";
       let finishReason: ChatCompletionChunk["finishReason"] = null;
+      let usageEvent: AgentEvent | undefined;
 
       // Stream the LLM response as message.delta events.
       const chunks = client.streamChat({
         model: planning.model,
         temperature: planning.temperature,
         ...(planning.maxTokens !== undefined ? { maxTokens: planning.maxTokens } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
         messages: [
           { role: "system", content: PLANNER_SYSTEM_PROMPT },
           { role: "user", content: input.prompt },
@@ -185,6 +198,7 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
       for await (const chunk of chunks) {
         fullText += chunk.content;
         finishReason = chunk.finishReason ?? finishReason;
+        usageEvent = usageEventFor(planning.model, chunk) ?? usageEvent;
         // Terminal frames may carry only a finishReason with empty content.
         if (chunk.content) {
           yield { type: "message.delta", messageId, text: chunk.content };
@@ -255,17 +269,20 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
       }
 
       yield { type: "message.completed", messageId };
+      if (usageEvent) yield usageEvent;
     },
 
     async *streamCode(input: CoderInput): AsyncIterable<AgentEvent> {
       const messageId = crypto.randomUUID();
       let fullText = "";
       let finishReason: ChatCompletionChunk["finishReason"] = null;
+      let usageEvent: AgentEvent | undefined;
 
       const chunks = client.streamChat({
         model: coding.model,
         temperature: coding.temperature,
         ...(coding.maxTokens !== undefined ? { maxTokens: coding.maxTokens } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
         messages: [
           { role: "system", content: CODER_SYSTEM_PROMPT },
           { role: "user", content: input.prompt },
@@ -275,6 +292,7 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
       for await (const chunk of chunks) {
         fullText += chunk.content;
         finishReason = chunk.finishReason ?? finishReason;
+        usageEvent = usageEventFor(coding.model, chunk) ?? usageEvent;
         if (chunk.content) {
           yield { type: "message.delta", messageId, text: chunk.content };
         }
@@ -351,6 +369,7 @@ export function createRealModelGateway(options: RealModelGatewayOptions): ModelG
       }
 
       yield { type: "message.completed", messageId };
+      if (usageEvent) yield usageEvent;
     },
 
     async summarizeProject(input: SummaryInput): Promise<string> {

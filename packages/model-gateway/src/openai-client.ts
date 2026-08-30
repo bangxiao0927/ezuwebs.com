@@ -22,6 +22,12 @@ export interface StreamOptions {
 export interface ChatCompletionChunk {
   content: string;
   finishReason: "stop" | "length" | "tool_calls" | "content_filter" | null;
+  /** Only present on the terminal frame when the request set stream_options.include_usage. */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 }
 
 // Default guard so a stalled upstream connection cannot hang a run forever.
@@ -43,14 +49,26 @@ function parseSseLine(line: string): ParsedSseLine | undefined {
   try {
     const parsed = JSON.parse(data);
     const choice = parsed.choices?.[0];
-    if (!choice) return undefined;
+    const usage = parsed.usage
+      ? {
+          promptTokens: Number(parsed.usage.prompt_tokens ?? 0),
+          completionTokens: Number(parsed.usage.completion_tokens ?? 0),
+          totalTokens: Number(parsed.usage.total_tokens ?? 0),
+        }
+      : undefined;
+
+    // The usage-accounting frame from OpenAI has an empty choices array and
+    // no delta, but must still be surfaced so callers can bill it.
+    if (!choice) {
+      return usage ? { chunk: { content: "", finishReason: null, usage } } : undefined;
+    }
 
     const content: string = choice.delta?.content ?? "";
     const finishReason = choice.finish_reason ?? null;
     // Emit whenever there is content or a terminal finish reason to report,
     // so callers can observe why the stream ended even on an empty final frame.
-    if (content || finishReason) {
-      return { chunk: { content, finishReason } };
+    if (content || finishReason || usage) {
+      return { chunk: { content, finishReason, ...(usage ? { usage } : {}) } };
     }
   } catch {
     // Skip malformed SSE lines.
@@ -112,6 +130,7 @@ export function createOpenAIClient(config: OpenAIClientConfig) {
           messages: opts.messages,
           max_tokens: opts.maxTokens ?? 4096,
           stream: true,
+          stream_options: { include_usage: true },
         }),
         signal: controller.signal,
       });

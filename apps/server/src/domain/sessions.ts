@@ -233,6 +233,24 @@ export async function selectBlock(
   });
 }
 
+/**
+ * Appends run-produced agent events onto a session's own event log so
+ * GET /api/sessions/:id (and its derived view model) reflect a completed
+ * run without the caller having to reconcile run events separately.
+ */
+export async function appendSessionEvents(
+  sessionId: string,
+  events: AgentEvent[],
+  requestingUserId?: string,
+): Promise<void> {
+  if (events.length === 0) return;
+  return withSessionLock(sessionId, async () => {
+    const record = await ensureSession(sessionId, requestingUserId);
+    record.events.push(...events);
+    await sessionRepository.save(record);
+  });
+}
+
 export async function applyEdit(
   sessionId: string,
   input: {
