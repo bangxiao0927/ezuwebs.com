@@ -30,6 +30,10 @@ import {
   sendPrompt,
 } from "../domain/sessions.js";
 import { getDashboard } from "../domain/dashboard.js";
+import {
+  SessionRowMissingError,
+  SessionSaveConflictError,
+} from "../domain/sqlite-session-repository.js";
 
 type Handler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
@@ -111,6 +115,8 @@ async function resolveCurrentUserIdForBilledAction(
 function errorStatus(error: unknown): number {
   if (error instanceof PayloadTooLargeError) return 413;
   if (error instanceof SessionNotFoundError) return 404;
+  if (error instanceof SessionRowMissingError) return 404;
+  if (error instanceof SessionSaveConflictError) return 409;
   if (error instanceof UnknownSessionDefinitionError) return 400;
   if (error instanceof InteractionConflictError) return 409;
   if (error instanceof InteractionValidationError) return 400;

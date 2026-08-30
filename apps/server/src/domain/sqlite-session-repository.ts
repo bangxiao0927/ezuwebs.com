@@ -22,6 +22,11 @@ import {
 export class SessionRowMissingError extends Error {}
 export class SessionSaveConflictError extends Error {}
 
+const CURRENT_WORKSPACE_BASELINE = {
+  version: getWorkspaceBaselineVersion(),
+  filesJson: serializeWorkspaceBaselineFiles(getDefaultWorkspaceSnapshot().files),
+};
+
 type BootstrapRest = Omit<WebAppBootstrap, "sessionId" | "projectId" | "initialEvents" | "workspaceFiles">;
 
 function bootstrapRestOf(bootstrap: WebAppBootstrap): BootstrapRest {
@@ -100,6 +105,7 @@ export function createSqliteSessionRepository(
   options: CreateSqliteSessionRepositoryOptions = {},
 ): SessionRepository {
   let dbPromise: Promise<EzuDb> | undefined;
+  const baselineFilesByVersion = new Map<string, WorkspaceFileEntry[]>();
 
   async function getDb(): Promise<EzuDb> {
     if (options.db) {
@@ -112,6 +118,9 @@ export function createSqliteSessionRepository(
   }
 
   async function loadBaselineFiles(db: EzuDb, version: string): Promise<WorkspaceFileEntry[]> {
+    const cached = baselineFilesByVersion.get(version);
+    if (cached) return cached;
+
     const { getWorkspaceBaselineRow } = await import("@ezu/db");
     const baseline = getWorkspaceBaselineRow(db, version);
     if (!baseline) {
@@ -119,7 +128,9 @@ export function createSqliteSessionRepository(
         `Workspace baseline ${version} referenced by a session is missing; cannot reconstruct its workspace files`,
       );
     }
-    return parseWorkspaceBaselineFilesJson(version, baseline.filesJson);
+    const files = parseWorkspaceBaselineFilesJson(version, baseline.filesJson);
+    baselineFilesByVersion.set(version, files);
+    return files;
   }
 
   async function fromRow(db: EzuDb, bundle: import("@ezu/db").SessionRowBundle): Promise<SessionRecord> {
@@ -154,10 +165,7 @@ export function createSqliteSessionRepository(
   }
 
   function currentWorkspaceBaselineForPersistence(): { version: string; filesJson: string } {
-    return {
-      version: getWorkspaceBaselineVersion(),
-      filesJson: serializeWorkspaceBaselineFiles(getDefaultWorkspaceSnapshot().files),
-    };
+    return CURRENT_WORKSPACE_BASELINE;
   }
 
   return {
