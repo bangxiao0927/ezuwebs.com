@@ -16,7 +16,7 @@ async function openTestRepository(t: {
   const directory = await mkdtemp(path.join(tmpdir(), "ezu-runs-sqlite-"));
   const databaseUrl = path.join(directory, "runs.db");
 
-  const { openDatabase, createSessionRow } = await import("@ezu/db");
+  const { createSessionRow, createUser, openDatabase } = await import("@ezu/db");
   let db;
   try {
     db = openDatabase({ databaseUrl, runMigrations: true });
@@ -32,6 +32,8 @@ async function openTestRepository(t: {
     db.$client.close();
     return rm(directory, { recursive: true, force: true });
   });
+
+  createUser(db, { id: "user-1", email: "run-user@example.test" });
 
   createSessionRow(db, {
     id: "session-1",
