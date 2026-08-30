@@ -48,6 +48,8 @@ export interface RunRepository {
   fail(id: string, expectedVersion: number, error: string): Promise<RunRecord>;
   cancel(id: string, expectedVersion: number): Promise<RunRecord>;
   listEventsAfter(runId: string, afterSeq: number): Promise<RunEventRecord[]>;
+  /** Highest seq recorded for a run, without reading any event rows. */
+  getLastEventSeq(runId: string): Promise<number>;
   /** Runs still marked "running" from a previous process lifetime. */
   listRunningRuns(): Promise<RunRecord[]>;
   /** Runs still marked "queued" from a previous process lifetime, recoverable on restart. */
@@ -169,6 +171,11 @@ export function createMemoryRunRepository(): RunRepository {
       return list
         .map((event, index) => ({ seq: index + 1, event }))
         .filter((entry) => entry.seq > afterSeq);
+    },
+
+    async getLastEventSeq(runId) {
+      const list = events.get(runId) ?? [];
+      return list.length;
     },
 
     async listRunningRuns() {

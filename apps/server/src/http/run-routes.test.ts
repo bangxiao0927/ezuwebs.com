@@ -273,3 +273,85 @@ test("POST /api/sessions/:id/runs/:runId/cancel persists cancellation and the ru
     });
   });
 });
+
+test("GET /api/sessions/:id/runs/:runId/events ends the stream with an SSE error frame instead of crashing when polling fails mid-stream", async () => {
+  resetDomainState();
+  configureModelGatewayFactory(() =>
+    fakeGatewayEmitting([{ type: "message.delta", messageId: "m1", text: "still going" }], { hang: true }),
+  );
+
+  const base = createMemoryRunRepository();
+  let pollCount = 0;
+  // The first poll (the initial replay) succeeds; the second poll fails, as
+  // if the repository backing the stream hit a transient error mid-stream,
+  // after SSE response headers were already written.
+  const flaky = {
+    ...base,
+    async listEventsAfter(runId: string, afterSeq: number) {
+      pollCount += 1;
+      if (pollCount === 2) throw new Error("transient read failure");
+      return base.listEventsAfter(runId, afterSeq);
+    },
+  };
+  configureRunRepository(flaky);
+
+  await withServer(createFakeAuthService(USER_A), async (baseUrl) => {
+    const sessionId = await createOwnedSession(baseUrl);
+    const created = await fetch(`${baseUrl}/api/sessions/${sessionId}/runs`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: "ezu_session=valid-session",
+        "idempotency-key": "req-1",
+      },
+      body: JSON.stringify({ kind: "prompt", text: "hi" }),
+    });
+    const { run } = (await created.json()) as { run: { id: string } };
+
+    const eventsResponse = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/runs/${run.id}/events?afterSeq=0`,
+      { headers: { cookie: "ezu_session=valid-session" } },
+    );
+    assert.equal(eventsResponse.status, 200);
+    const text = await eventsResponse.text();
+    assert.ok(text.includes("event: error"), "expected an SSE error frame, not a crashed connection");
+  });
+});
+
+test("GET /api/sessions/:id/runs/:runId/events stops polling once the client disconnects", async () => {
+  resetDomainState();
+  configureModelGatewayFactory(() =>
+    fakeGatewayEmitting([{ type: "message.delta", messageId: "m1", text: "still going" }], { hang: true }),
+  );
+
+  await withServer(createFakeAuthService(USER_A), async (baseUrl) => {
+    const sessionId = await createOwnedSession(baseUrl);
+    const created = await fetch(`${baseUrl}/api/sessions/${sessionId}/runs`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: "ezu_session=valid-session",
+        "idempotency-key": "req-1",
+      },
+      body: JSON.stringify({ kind: "prompt", text: "hi" }),
+    });
+    const { run } = (await created.json()) as { run: { id: string } };
+
+    const controller = new AbortController();
+    const eventsResponse = await fetch(
+      `${baseUrl}/api/sessions/${sessionId}/runs/${run.id}/events?afterSeq=0`,
+      { headers: { cookie: "ezu_session=valid-session" }, signal: controller.signal },
+    );
+    const bodyPromise = eventsResponse.text();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    controller.abort();
+    await assert.rejects(bodyPromise);
+
+    // The run itself is still running; only the client's connection ended.
+    const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/runs/${run.id}`, {
+      headers: { cookie: "ezu_session=valid-session" },
+    });
+    const body = (await response.json()) as { run: { status: string } };
+    assert.equal(body.run.status, "running");
+  });
+});

@@ -38,7 +38,7 @@ import {
   cancelRun,
   createRun,
   getRun,
-  listRunEvents,
+  pollRunStream,
   RunNotFoundError,
 } from "../domain/run-service.js";
 
@@ -76,15 +76,24 @@ function sleep(ms: number): Promise<void> {
  * event up to that point has been sent. Polling (rather than a live
  * subscription that starts after replay) means there is no window in which
  * an event appended between "replay" and "subscribe" could be missed.
+ *
+ * Ownership of the run is checked exactly once by the caller before this
+ * function is invoked; every poll after that goes straight to the run
+ * repository via pollRunStream, since ownership cannot change over a run's
+ * lifetime and a session hydration on every poll tick would be wasted work.
+ *
+ * Once writeHead(200, ...) below has run, the response is committed to the
+ * SSE content type: any later error can only be reported as an `event:
+ * error` frame on this same stream, never as an outer JSON error response
+ * (that would call writeHead a second time and throw
+ * ERR_HTTP_HEADERS_SENT).
  */
 async function streamRunEvents(
   request: IncomingMessage,
   response: ServerResponse,
   allowedOrigin: string | undefined,
-  sessionId: string,
   runId: string,
   afterSeq: number,
-  requestingUserId: string | undefined,
 ): Promise<void> {
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -94,28 +103,41 @@ async function streamRunEvents(
   });
 
   let cursor = afterSeq;
-  let clientDisconnected = false;
-  request.on("close", () => {
-    clientDisconnected = true;
-  });
+  let stopped = false;
+  const stop = (): void => {
+    stopped = true;
+  };
+  request.on("close", stop);
+  response.on("close", stop);
 
-  while (!clientDisconnected) {
-    const events = await listRunEvents(sessionId, runId, cursor, requestingUserId);
-    for (const entry of events) {
-      response.write(`id: ${entry.seq}\nevent: agent\ndata: ${JSON.stringify(entry.event)}\n\n`);
-      cursor = entry.seq;
-    }
+  try {
+    while (!stopped) {
+      const poll = await pollRunStream(runId, cursor);
+      if (stopped) break;
+      for (const entry of poll.events) {
+        response.write(`id: ${entry.seq}\nevent: agent\ndata: ${JSON.stringify(entry.event)}\n\n`);
+        cursor = entry.seq;
+      }
 
-    const run = await getRun(sessionId, runId, requestingUserId);
-    if (RUN_TERMINAL_STATUSES.has(run.status) && cursor >= run.lastEventSeq) {
-      break;
+      if (RUN_TERMINAL_STATUSES.has(poll.status) && cursor >= poll.lastEventSeq) {
+        break;
+      }
+      if (stopped) break;
+      response.write(`: heartbeat\n\n`);
+      await sleep(SSE_POLL_INTERVAL_MS);
     }
-    if (clientDisconnected) break;
-    response.write(`: heartbeat\n\n`);
-    await sleep(SSE_POLL_INTERVAL_MS);
+  } catch (error) {
+    if (!stopped && !response.writableEnded) {
+      const message = error instanceof Error ? error.message : "Internal server error";
+      response.write(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`);
+    }
+  } finally {
+    request.off("close", stop);
+    response.off("close", stop);
+    if (!response.writableEnded) {
+      response.end();
+    }
   }
-
-  response.end();
 }
 
 export interface CreateApiHandlerOptions {
@@ -491,7 +513,7 @@ export function createApiHandler(options: CreateApiHandlerOptions = {}): Handler
           // Ownership check up front: a stream that fails mid-flight cannot
           // change its response status once headers are already written.
           await getRun(sessionId, runId, currentUserId);
-          await streamRunEvents(request, response, allowedOrigin, sessionId, runId, afterSeq, currentUserId);
+          await streamRunEvents(request, response, allowedOrigin, runId, afterSeq);
           return;
         }
 

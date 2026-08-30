@@ -9,6 +9,7 @@ import { createSessionRow } from "./sessions.js";
 import {
   appendRunEventRow,
   createRunRow,
+  getMaxRunEventSeq,
   getRunRow,
   listRunEventRowsAfter,
   updateRunRow,
@@ -118,6 +119,23 @@ test("listRunEventRowsAfter only returns events with a higher sequence number", 
     events.map((event) => event.seq),
     [2, 3],
   );
+});
+
+test("getMaxRunEventSeq returns the highest seq for a run, or 0 when it has no events", async (t) => {
+  const db = await openTempDatabase(t);
+  if (!db) {
+    t.skip("better-sqlite3 native binding is unavailable in this environment");
+    return;
+  }
+  seedSession(db, "session-1");
+  createRunRow(db, { id: "run-1", sessionId: "session-1", kind: "prompt", inputJson: "{}" });
+
+  assert.equal(getMaxRunEventSeq(db, "run-1"), 0);
+
+  appendRunEventRow(db, "run-1", JSON.stringify({ type: "a" }));
+  appendRunEventRow(db, "run-1", JSON.stringify({ type: "b" }));
+
+  assert.equal(getMaxRunEventSeq(db, "run-1"), 2);
 });
 
 test("updateRunRow applies a patch when the version matches and rejects a stale version", async (t) => {

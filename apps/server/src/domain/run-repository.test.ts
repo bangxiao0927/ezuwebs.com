@@ -57,6 +57,17 @@ test("listEventsAfter returns only events with a higher sequence number, in orde
   );
 });
 
+test("getLastEventSeq returns the highest seq for a run, or 0 when it has no events", async () => {
+  const repo = createMemoryRunRepository();
+  await repo.create({ id: "run-1", sessionId: "session-1", kind: "prompt", input: {} });
+  assert.equal(await repo.getLastEventSeq("run-1"), 0);
+
+  await repo.appendEvent("run-1", { type: "message.delta", messageId: "m", text: "a" });
+  await repo.appendEvent("run-1", { type: "message.delta", messageId: "m", text: "b" });
+
+  assert.equal(await repo.getLastEventSeq("run-1"), 2);
+});
+
 test("complete/fail/cancel require the caller's expected version and reject a stale one", async () => {
   const repo = createMemoryRunRepository();
   const created = await repo.create({ id: "run-1", sessionId: "session-1", kind: "prompt", input: {} });

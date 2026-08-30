@@ -9,7 +9,9 @@ import {
 } from "./billing/billing-service.js";
 import {
   createMemoryRunRepository,
+  RunAlreadyExistsError,
   RunNotFoundError,
+  RunVersionConflictError,
   type RunRecord,
   type RunRepository,
   type RunStatus,
@@ -17,6 +19,8 @@ import {
 import { appendSessionEvents, getSession } from "./sessions.js";
 
 export { RunNotFoundError };
+
+const RUN_TERMINAL_STATUSES = new Set<RunStatus>(["completed", "failed", "cancelled"]);
 
 let runRepository: RunRepository = createMemoryRunRepository();
 
@@ -59,8 +63,7 @@ function toRunDto(run: RunRecord, lastEventSeq: number): RunDto {
 }
 
 async function lastEventSeqFor(runId: string): Promise<number> {
-  const events = await runRepository.listEventsAfter(runId, 0);
-  return events.at(-1)?.seq ?? 0;
+  return runRepository.getLastEventSeq(runId);
 }
 
 function deterministicRunId(sessionId: string, requestId: string | undefined): string {
@@ -115,17 +118,31 @@ export async function createRun(
     }
   }
 
-  const run = await runRepository.create({
-    id: runId,
-    sessionId,
-    ...(requestingUserId ? { userId: requestingUserId } : {}),
-    kind: input.kind,
-    input: { text: input.text, requestId: input.requestId },
-  });
+  let run: RunRecord;
+  try {
+    run = await runRepository.create({
+      id: runId,
+      sessionId,
+      ...(requestingUserId ? { userId: requestingUserId } : {}),
+      kind: input.kind,
+      input: { text: input.text, requestId: input.requestId },
+    });
+  } catch (error) {
+    // A concurrent createRun call for the same requestId can win the create
+    // race; chargeUsage above already deduped the charge by requestId, so
+    // the loser just replays the winner's run instead of erroring out.
+    if (error instanceof RunAlreadyExistsError) {
+      const existing = await runRepository.get(runId);
+      if (existing) {
+        return toRunDto(existing, await lastEventSeqFor(runId));
+      }
+    }
+    throw error;
+  }
 
   if (!executing.has(run.id)) {
     executing.add(run.id);
-    void executeRun(run.id).finally(() => executing.delete(run.id));
+    void executeRun(run.id).catch(() => undefined).finally(() => executing.delete(run.id));
   }
 
   return toRunDto(run, 0);
@@ -167,6 +184,29 @@ export async function listRunEvents(
   return runRepository.listEventsAfter(runId, afterSeq);
 }
 
+export interface RunStreamPoll {
+  events: RunEventDto[];
+  status: RunStatus;
+  lastEventSeq: number;
+}
+
+/**
+ * Polls a run's new events and terminal status directly, without repeating
+ * the session/run ownership check. The caller must have already established
+ * visibility once (e.g. via getRun) before it starts polling; ownership
+ * cannot change over a run's lifetime, so re-checking it on every poll would
+ * only add repeated session reads for no safety benefit.
+ */
+export async function pollRunStream(runId: string, afterSeq: number): Promise<RunStreamPoll> {
+  const events = await runRepository.listEventsAfter(runId, afterSeq);
+  const run = await runRepository.get(runId);
+  if (!run) {
+    throw new RunNotFoundError(`Unknown run: ${runId}`);
+  }
+  const lastEventSeq = await runRepository.getLastEventSeq(runId);
+  return { events, status: run.status, lastEventSeq };
+}
+
 export async function cancelRun(
   sessionId: string,
   runId: string,
@@ -180,6 +220,13 @@ export async function cancelRun(
   return toRunDto(updated, await lastEventSeqFor(runId));
 }
 
+// A requestCancel can land between reading a run's current version and
+// writing its terminal transition (both readable through the public
+// RunRepository interface, so this is a real race, not a hypothetical one).
+// Retrying with a fresh read bounds that race instead of ever surfacing a
+// RunVersionConflictError up through the background execution promise.
+const MAX_SETTLE_ATTEMPTS = 5;
+
 async function settleRun(run: RunRecord, terminalError: unknown): Promise<void> {
   const shouldRefund =
     isBillingEnabled() &&
@@ -187,17 +234,27 @@ async function settleRun(run: RunRecord, terminalError: unknown): Promise<void> 
     typeof (run.input as { requestId?: string } | undefined)?.requestId === "string";
   const requestId = (run.input as { requestId?: string }).requestId ?? "";
 
-  const current = await runRepository.get(run.id);
-  const cancelRequested = current?.cancelRequested ?? run.cancelRequested;
-  const expectedVersion = current?.version ?? run.version;
+  let cancelRequested = run.cancelRequested;
+  for (let attempt = 1; attempt <= MAX_SETTLE_ATTEMPTS; attempt++) {
+    const current = await runRepository.get(run.id);
+    if (!current) return;
+    cancelRequested = current.cancelRequested;
 
-  if (cancelRequested) {
-    await runRepository.cancel(run.id, expectedVersion);
-  } else if (terminalError) {
-    const message = terminalError instanceof Error ? terminalError.message : String(terminalError);
-    await runRepository.fail(run.id, expectedVersion, message);
-  } else {
-    await runRepository.complete(run.id, expectedVersion);
+    try {
+      if (cancelRequested) {
+        await runRepository.cancel(run.id, current.version);
+      } else if (terminalError) {
+        const message = terminalError instanceof Error ? terminalError.message : String(terminalError);
+        await runRepository.fail(run.id, current.version, message);
+      } else {
+        await runRepository.complete(run.id, current.version);
+      }
+      break;
+    } catch (error) {
+      if (!(error instanceof RunVersionConflictError) || attempt === MAX_SETTLE_ATTEMPTS) {
+        throw error;
+      }
+    }
   }
 
   if (shouldRefund && (cancelRequested || terminalError)) {
@@ -211,49 +268,102 @@ async function settleRun(run: RunRecord, terminalError: unknown): Promise<void> 
   }
 }
 
-async function executeRun(runId: string): Promise<void> {
-  const created = await runRepository.get(runId);
-  if (!created) return;
-
-  const claimed = await runRepository.claim(runId).catch(() => undefined);
-  if (!claimed) return;
-
-  const controller = new AbortController();
-  abortControllers.set(runId, controller);
-
-  const emittedEvents: AgentEvent[] = [];
-  let terminalError: unknown;
-
-  try {
-    const text = (claimed.input as { text: string }).text;
-    const userMessageId = crypto.randomUUID();
-    const userEvents: AgentEvent[] = [
-      { type: "message.delta", messageId: userMessageId, text, role: "user" },
-      { type: "message.completed", messageId: userMessageId },
-    ];
-    for (const event of userEvents) {
-      await runRepository.appendEvent(runId, event);
-      emittedEvents.push(event);
-    }
-
-    const gateway = modelGatewayFactory();
-    for await (const event of gateway.streamPlan({ prompt: text, signal: controller.signal })) {
-      const current = await runRepository.get(runId);
-      if (current?.cancelRequested) {
-        controller.abort(new Error("Run cancelled by user"));
-        break;
-      }
-      await runRepository.appendEvent(runId, event);
-      emittedEvents.push(event);
-    }
-  } catch (error) {
-    terminalError = error;
-  } finally {
-    abortControllers.delete(runId);
+/**
+ * Best-effort fallback when settleRun itself fails (e.g. its bounded CAS
+ * retry is exhausted): forces the run to failed with a fresh version and
+ * still attempts the usage refund, so a run never gets stuck running/queued
+ * and a charge is never left un-refunded because of a settlement error.
+ */
+async function forceFailAfterSettlementFailure(run: RunRecord): Promise<void> {
+  const current = await runRepository.get(run.id).catch(() => undefined);
+  if (current && !RUN_TERMINAL_STATUSES.has(current.status)) {
+    await runRepository.fail(run.id, current.version, "Run settlement failed").catch(() => undefined);
   }
+  if (isBillingEnabled() && run.userId) {
+    const requestId = (run.input as { requestId?: string } | undefined)?.requestId ?? "";
+    await refundUsageCharge({
+      userId: run.userId,
+      kind: "prompt",
+      sessionId: run.sessionId,
+      requestId,
+      reason: "run settlement failed",
+    }).catch(() => undefined);
+  }
+}
 
-  await appendSessionEvents(claimed.sessionId, emittedEvents, claimed.userId).catch(() => undefined);
-  await settleRun(claimed, terminalError);
+async function executeRun(runId: string): Promise<void> {
+  let claimed: RunRecord | undefined;
+  try {
+    const created = await runRepository.get(runId);
+    if (!created) return;
+
+    claimed = await runRepository.claim(runId).catch(() => undefined);
+    if (!claimed) return;
+
+    const controller = new AbortController();
+    abortControllers.set(runId, controller);
+
+    const emittedEvents: AgentEvent[] = [];
+    let terminalError: unknown;
+
+    try {
+      const text = (claimed.input as { text: string }).text;
+      const userMessageId = crypto.randomUUID();
+      const userEvents: AgentEvent[] = [
+        { type: "message.delta", messageId: userMessageId, text, role: "user" },
+        { type: "message.completed", messageId: userMessageId },
+      ];
+      for (const event of userEvents) {
+        await runRepository.appendEvent(runId, event);
+        emittedEvents.push(event);
+      }
+
+      const gateway = modelGatewayFactory();
+      for await (const event of gateway.streamPlan({ prompt: text, signal: controller.signal })) {
+        const current = await runRepository.get(runId);
+        if (current?.cancelRequested) {
+          controller.abort(new Error("Run cancelled by user"));
+          break;
+        }
+        await runRepository.appendEvent(runId, event);
+        emittedEvents.push(event);
+      }
+    } catch (error) {
+      terminalError = error;
+    } finally {
+      abortControllers.delete(runId);
+    }
+
+    await appendSessionEvents(claimed.sessionId, emittedEvents, claimed.userId).catch(() => undefined);
+    await settleRun(claimed, terminalError);
+  } catch (error) {
+    // This background promise is started with `void`; nothing awaits it, so
+    // any error must be handled here rather than becoming an unhandled
+    // rejection.
+    if (claimed) {
+      await forceFailAfterSettlementFailure(claimed).catch(() => undefined);
+    }
+  }
+}
+
+/**
+ * Fails a run interrupted mid-execution by a server restart and, if it was
+ * charged, refunds the charge. refundUsageCharge is idempotent per
+ * requestId, so re-running startup recovery after a fast restart-of-a-restart
+ * never double-refunds.
+ */
+async function failInterruptedRun(run: RunRecord): Promise<void> {
+  await runRepository.fail(run.id, run.version, "Interrupted by server restart");
+  if (isBillingEnabled() && run.userId) {
+    const requestId = (run.input as { requestId?: string } | undefined)?.requestId ?? "";
+    await refundUsageCharge({
+      userId: run.userId,
+      kind: "prompt",
+      sessionId: run.sessionId,
+      requestId,
+      reason: "run interrupted by restart",
+    }).catch(() => undefined);
+  }
 }
 
 /**
@@ -265,16 +375,16 @@ async function executeRun(runId: string): Promise<void> {
 export async function recoverRunsOnStartup(): Promise<void> {
   const running = await runRepository.listRunningRuns();
   for (const run of running) {
-    await runRepository
-      .fail(run.id, run.version, "Interrupted by server restart")
-      .catch(() => undefined);
+    // One run's failure (fail() conflicting, refund erroring, etc.) must
+    // never stop recovery from reaching the rest of the running/queued runs.
+    await failInterruptedRun(run).catch(() => undefined);
   }
 
   const queued = await runRepository.listQueuedRuns();
   for (const run of queued) {
     if (!executing.has(run.id)) {
       executing.add(run.id);
-      void executeRun(run.id).finally(() => executing.delete(run.id));
+      void executeRun(run.id).catch(() => undefined).finally(() => executing.delete(run.id));
     }
   }
 }

@@ -95,6 +95,19 @@ test("createSqliteRunRepository appendEvent/listEventsAfter persist events with 
   );
 });
 
+test("createSqliteRunRepository getLastEventSeq returns the highest persisted seq", async (t) => {
+  const context = await openTestRepository(t);
+  if (!context) return;
+  const { repository } = context;
+  await repository.create({ id: "run-1", sessionId: "session-1", kind: "prompt", input: {} });
+  assert.equal(await repository.getLastEventSeq("run-1"), 0);
+
+  await repository.appendEvent("run-1", { type: "message.delta", messageId: "m", text: "a" });
+  await repository.appendEvent("run-1", { type: "message.delta", messageId: "m", text: "b" });
+
+  assert.equal(await repository.getLastEventSeq("run-1"), 2);
+});
+
 test("createSqliteRunRepository requestCancel and listRunningRuns/listQueuedRuns", async (t) => {
   const context = await openTestRepository(t);
   if (!context) return;

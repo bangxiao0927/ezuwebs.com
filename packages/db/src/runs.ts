@@ -124,3 +124,16 @@ export function listRunEventRowsAfter(db: EzuDb, runId: string, afterSeq: number
     .orderBy(asc(runEvents.seq))
     .all();
 }
+
+/**
+ * Highest seq recorded for a run, without reading any event rows. Used by
+ * SSE polling to detect "caught up to a terminal run" cheaply.
+ */
+export function getMaxRunEventSeq(db: EzuDb, runId: string): number {
+  const row = db
+    .select({ maxSeq: max(runEvents.seq) })
+    .from(runEvents)
+    .where(eq(runEvents.runId, runId))
+    .get();
+  return row?.maxSeq ?? 0;
+}

@@ -147,6 +147,12 @@ export function createSqliteRunRepository(
       );
     },
 
+    async getLastEventSeq(runId) {
+      const db = await getDb();
+      const { getMaxRunEventSeq } = await import("@ezu/db");
+      return getMaxRunEventSeq(db, runId);
+    },
+
     async listRunningRuns() {
       const db = await getDb();
       const { listRunsByStatus } = await import("@ezu/db");
