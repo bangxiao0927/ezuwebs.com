@@ -54,6 +54,9 @@ importers:
       '@ezu/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@ezu/runtime-browser':
+        specifier: workspace:*
+        version: link:../../packages/runtime-browser
       '@ezu/ui':
         specifier: workspace:*
         version: link:../../packages/ui

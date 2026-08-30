@@ -16,6 +16,7 @@ import {
   type SessionRecord,
   type SessionRepository,
 } from "./session-repository.js";
+import { createSessionRuntimeManager, type SessionRuntimeManager } from "./session-runtime-manager.js";
 import {
   createInteractiveWebEditorState,
   createInteractiveWebEditResponse,
@@ -68,6 +69,16 @@ let sessionRepository = createMemorySessionRepository();
 
 export function configureSessionRepository(repository: SessionRepository): void {
   sessionRepository = repository;
+}
+
+let sessionRuntimeManager = createSessionRuntimeManager();
+
+export function configureSessionRuntimeManager(manager: SessionRuntimeManager): void {
+  sessionRuntimeManager = manager;
+}
+
+export function getSessionRuntimeManager(): SessionRuntimeManager {
+  return sessionRuntimeManager;
 }
 
 const sessionLocks = new Map<string, Promise<void>>();
@@ -503,14 +514,20 @@ export async function resolveApproval(
     await sessionRepository.save(record);
 
     if (runningAction) {
-      const result = await executeApprovedBlockEdit({
-        sessionId: record.id,
-        projectId: record.bootstrap.projectId,
-        action: runningAction,
-        ...(record.bootstrap.workspaceFiles ? { workspaceFiles: record.bootstrap.workspaceFiles } : {}),
-      });
+      const { result, workspaceFiles } = await sessionRuntimeManager.withRuntime(
+        record.id,
+        record.bootstrap.workspaceFiles ?? [],
+        (runtime) =>
+          executeApprovedBlockEdit({
+            sessionId: record.id,
+            projectId: record.bootstrap.projectId,
+            action: runningAction!,
+            runtime,
+            ...(record.bootstrap.workspaceFiles ? { workspaceFiles: record.bootstrap.workspaceFiles } : {}),
+          }),
+      );
       record.events.push(...dropNoisyEvents(result.events));
-      record.bootstrap = { ...record.bootstrap, workspaceFiles: result.workspaceFiles };
+      record.bootstrap = { ...record.bootstrap, workspaceFiles };
       await sessionRepository.save(record);
     }
 
@@ -606,14 +623,20 @@ export async function retryAction(
       // silently leaving it in a state nothing will ever reconcile.
       await sessionRepository.save(record);
 
-      const result = await executeApprovedBlockEdit({
-        sessionId: record.id,
-        projectId: record.bootstrap.projectId,
-        action: runningAction,
-        ...(record.bootstrap.workspaceFiles ? { workspaceFiles: record.bootstrap.workspaceFiles } : {}),
-      });
+      const { result, workspaceFiles } = await sessionRuntimeManager.withRuntime(
+        record.id,
+        record.bootstrap.workspaceFiles ?? [],
+        (runtime) =>
+          executeApprovedBlockEdit({
+            sessionId: record.id,
+            projectId: record.bootstrap.projectId,
+            action: runningAction,
+            runtime,
+            ...(record.bootstrap.workspaceFiles ? { workspaceFiles: record.bootstrap.workspaceFiles } : {}),
+          }),
+      );
       record.events.push(...dropNoisyEvents(result.events));
-      record.bootstrap = { ...record.bootstrap, workspaceFiles: result.workspaceFiles };
+      record.bootstrap = { ...record.bootstrap, workspaceFiles };
 
       await sessionRepository.save(record);
       return toDto(record);

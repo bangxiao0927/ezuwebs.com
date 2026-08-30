@@ -9,7 +9,13 @@ import {
   importLegacyJsonSessionStore,
   type SessionRepository,
 } from "./domain/session-repository.js";
-import { configureSessionRepository, recoverSessionsOnStartup } from "./domain/sessions.js";
+import {
+  configureSessionRepository,
+  configureSessionRuntimeManager,
+  getSessionRuntimeManager,
+  recoverSessionsOnStartup,
+} from "./domain/sessions.js";
+import { createSessionRuntimeManager } from "./domain/session-runtime-manager.js";
 import { createSqliteSessionRepository } from "./domain/sqlite-session-repository.js";
 import { createSqliteRunRepository } from "./domain/sqlite-run-repository.js";
 import { configureRunRepository, recoverRunsOnStartup } from "./domain/run-service.js";
@@ -62,6 +68,12 @@ function createConfiguredRunRepository(): RunRepository {
 
 const sessionRepository = await createConfiguredSessionRepository();
 configureSessionRepository(sessionRepository);
+const configuredIdleTtlMs = Number.parseInt(process.env.SESSION_RUNTIME_IDLE_TTL_MS ?? "", 10);
+configureSessionRuntimeManager(
+  createSessionRuntimeManager(
+    Number.isFinite(configuredIdleTtlMs) && configuredIdleTtlMs > 0 ? { idleTtlMs: configuredIdleTtlMs } : {},
+  ),
+);
 configureRunRepository(createConfiguredRunRepository());
 configureBillingStore(createSqliteBillingStore());
 configureBillingEnabled(resolveBillingEnabled(process.env));
@@ -69,6 +81,33 @@ configureBillingEnabled(resolveBillingEnabled(process.env));
 const handler = createApiHandler();
 const server = createServer((request, response) => {
   void handler(request, response);
+});
+
+const idleEvictionInterval = setInterval(() => {
+  getSessionRuntimeManager().evictIdle();
+}, 60_000);
+idleEvictionInterval.unref();
+
+let shuttingDown = false;
+
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  // eslint-disable-next-line no-console
+  console.log(`[ezu/server] Received ${signal}, shutting down gracefully...`);
+  clearInterval(idleEvictionInterval);
+  server.close();
+  await getSessionRuntimeManager().disposeAll();
+  process.exit(0);
+}
+
+process.on("SIGTERM", (signal) => {
+  void shutdown(signal);
+});
+process.on("SIGINT", (signal) => {
+  void shutdown(signal);
 });
 
 recoverSessionsOnStartup()

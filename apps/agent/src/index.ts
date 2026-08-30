@@ -31,6 +31,7 @@ export interface BlockEditDemoOptions extends AgentAppOptions {
 
 export interface ApprovedBlockEditExecutionOptions extends AgentAppOptions {
   action: ActionState;
+  runtime: RuntimeAdapter;
   workspaceFiles?: WorkspaceFileEntry[];
 }
 
@@ -206,7 +207,7 @@ export async function executeApprovedBlockEdit(
 
   sessionStore.upsert(session);
 
-  const runtime = createBrowserRuntimeStub(options.workspaceFiles ?? []);
+  const runtime = options.runtime;
   const executor = createExecutor({ runtime, sessionStore });
   const stopBridging = await bridgeRuntimeEvents({
     runtime,
