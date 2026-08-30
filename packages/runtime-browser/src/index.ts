@@ -477,6 +477,12 @@ export class BrowserRuntimeStub implements RuntimeAdapter {
     return [...this.files.keys()].filter((path) => path.startsWith(root)).sort();
   }
 
+  async snapshotFiles(): Promise<Array<{ path: string; content: string }>> {
+    return [...this.files.entries()]
+      .map(([path, content]) => ({ path, content }))
+      .sort((left, right) => left.path.localeCompare(right.path));
+  }
+
   async deleteFile(path: string): Promise<void> {
     this.files.delete(path);
     this.emitFileEvent({ path, type: "delete" });

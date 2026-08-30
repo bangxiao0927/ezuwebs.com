@@ -2,7 +2,10 @@ export {
   type RemoteRuntimeConfig,
   type RemoteRuntimeConfigInput,
   type RemoteRuntimeLimits,
+  type RemoteRuntimeSharedConfig,
+  type RemoteRuntimeSharedConfigInput,
   validateRemoteRuntimeConfig,
+  validateRemoteRuntimeSharedConfig,
 } from "./config.js";
 export {
   RemoteRuntimeConfigError,

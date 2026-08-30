@@ -19,6 +19,7 @@ import {
   commandStatusResponseSchema,
   fileListResponseSchema,
   fileReadResponseSchema,
+  fileSnapshotResponseSchema,
   previewResponseSchema,
   runtimeCreateResponseSchema,
   runtimeEventsResponseSchema,
@@ -89,6 +90,7 @@ class RemoteRuntimeProcess implements RuntimeProcess {
   private readonly exitListeners = new Set<(code: number) => void>();
   private stopped = false;
   private exited = false;
+  private exitCode: number | undefined;
   private cancelRequested = false;
   private outputBytesSoFar = 0;
   private truncated = false;
@@ -113,6 +115,11 @@ class RemoteRuntimeProcess implements RuntimeProcess {
   }
 
   onExit(cb: (code: number) => void): void {
+    if (this.exited) {
+      const code = this.exitCode!;
+      queueMicrotask(() => cb(code));
+      return;
+    }
     this.exitListeners.add(cb);
   }
 
@@ -133,6 +140,11 @@ class RemoteRuntimeProcess implements RuntimeProcess {
       // Best-effort: the process is already stopped locally regardless of
       // whether the worker's own cancel takes effect.
     }
+  }
+
+  /** Settles this process as exited using a status the worker already reported, without polling for its own events. */
+  settleExited(code: number): void {
+    this.finish(code);
   }
 
   private stop(): void {
@@ -176,6 +188,7 @@ class RemoteRuntimeProcess implements RuntimeProcess {
       return;
     }
     this.exited = true;
+    this.exitCode = code;
     this.stop();
     for (const listener of this.exitListeners) {
       listener(code);
@@ -255,6 +268,8 @@ class RemoteRuntimeEventBus {
   >();
   private afterSeq = 0;
   private polling = false;
+  /** Bumped every time polling stops; a poll captures its generation when scheduled and abandons itself if the generation has since moved on, so a stale in-flight poll from before an unsubscribe/resubscribe race can never resume or dispatch. */
+  private generation = 0;
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private pollAbortController: AbortController | undefined;
 
@@ -284,6 +299,7 @@ class RemoteRuntimeEventBus {
 
   stop(): void {
     this.polling = false;
+    this.generation += 1;
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = undefined;
@@ -306,8 +322,9 @@ class RemoteRuntimeEventBus {
   }
 
   private schedulePoll(delayMs: number): void {
+    const generation = this.generation;
     this.pollTimer = setTimeout(() => {
-      void this.poll();
+      void this.poll(generation);
     }, delayMs);
   }
 
@@ -327,8 +344,12 @@ class RemoteRuntimeEventBus {
     }
   }
 
-  private async poll(): Promise<void> {
-    if (!this.polling) {
+  private isCurrent(generation: number): boolean {
+    return this.polling && generation === this.generation;
+  }
+
+  private async poll(generation: number): Promise<void> {
+    if (!this.isCurrent(generation)) {
       return;
     }
 
@@ -336,13 +357,13 @@ class RemoteRuntimeEventBus {
     try {
       runtimeId = await this.getRuntimeId();
     } catch {
-      if (this.polling) {
+      if (this.isCurrent(generation)) {
         this.schedulePoll(this.config.pollIntervalMs);
       }
       return;
     }
 
-    if (!this.polling) {
+    if (!this.isCurrent(generation)) {
       return;
     }
 
@@ -356,13 +377,13 @@ class RemoteRuntimeEventBus {
         this.httpOptions,
       );
     } catch {
-      if (this.polling) {
+      if (this.isCurrent(generation)) {
         this.schedulePoll(this.config.pollIntervalMs);
       }
       return;
     }
 
-    if (!this.polling) {
+    if (!this.isCurrent(generation)) {
       return;
     }
 
@@ -379,7 +400,7 @@ class RemoteRuntimeEventBus {
     try {
       for (const event of parsed.events) {
         this.dispatch(event);
-        if (!this.polling) {
+        if (!this.isCurrent(generation)) {
           return;
         }
       }
@@ -390,7 +411,7 @@ class RemoteRuntimeEventBus {
       return;
     }
 
-    if (this.polling) {
+    if (this.isCurrent(generation)) {
       this.schedulePoll(this.config.pollIntervalMs);
     }
   }
@@ -529,6 +550,34 @@ export function createRemoteRuntimeAdapter(
       return parseWorkerResponse(fileListResponseSchema, raw, "file list").files;
     },
 
+    async snapshotFiles() {
+      const id = await ensureRuntime();
+      const raw = await requestRuntimeWorker(
+        config,
+        runtimePath(id, "/files/snapshot"),
+        { method: "GET" },
+        httpOptions,
+      );
+      const parsed = parseWorkerResponse(fileSnapshotResponseSchema, raw, "file snapshot");
+
+      if (parsed.files.length > config.limits.maxFileCount) {
+        throw new RemoteRuntimeValidationError(
+          `snapshot contains ${parsed.files.length} files, exceeding the configured limit of ${config.limits.maxFileCount}`,
+        );
+      }
+      let totalBytes = 0;
+      for (const file of parsed.files) {
+        totalBytes += byteLength(file.content);
+        if (totalBytes > config.limits.maxSeedBytes) {
+          throw new RemoteRuntimeValidationError(
+            `snapshot totals more than the configured limit of ${config.limits.maxSeedBytes} bytes`,
+          );
+        }
+      }
+
+      return parsed.files;
+    },
+
     async deleteFile(path) {
       const validPath = validateWorkspacePath(path);
       const id = await ensureRuntime();
@@ -570,14 +619,20 @@ export function createRemoteRuntimeAdapter(
       });
       if (parsed.status === "exited") {
         // The worker settled the command before we started polling for
-        // events; a status fetch reconciles the process's terminal state.
-        const statusRaw = await requestRuntimeWorker(
-          config,
-          runtimePath(id, `/commands/${encodeURIComponent(parsed.commandId)}`),
-          { method: "GET" },
-          httpOptions,
-        );
-        parseWorkerResponse(commandStatusResponseSchema, statusRaw, "command status");
+        // events; settle here rather than letting the process silently poll
+        // for events that already happened.
+        if (parsed.exitCode !== undefined) {
+          process.settleExited(parsed.exitCode);
+        } else {
+          const statusRaw = await requestRuntimeWorker(
+            config,
+            runtimePath(id, `/commands/${encodeURIComponent(parsed.commandId)}`),
+            { method: "GET" },
+            httpOptions,
+          );
+          const status = parseWorkerResponse(commandStatusResponseSchema, statusRaw, "command status");
+          process.settleExited(status.exitCode ?? RUNTIME_PROTOCOL_ERROR_EXIT_CODE);
+        }
       }
       return process;
     },

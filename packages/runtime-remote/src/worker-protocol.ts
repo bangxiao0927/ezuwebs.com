@@ -11,9 +11,14 @@ export const fileReadResponseSchema = z.object({ content: z.string() });
 
 export const fileListResponseSchema = z.object({ files: z.array(z.string()) });
 
+export const fileSnapshotResponseSchema = z.object({
+  files: z.array(z.object({ path: z.string(), content: z.string() })),
+});
+
 export const commandCreateResponseSchema = z.object({
   commandId: z.string(),
   status: z.enum(["running", "exited"]),
+  exitCode: z.number().int().optional(),
 });
 
 export const commandStatusResponseSchema = z.object({

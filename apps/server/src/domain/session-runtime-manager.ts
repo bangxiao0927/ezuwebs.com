@@ -45,6 +45,9 @@ interface RuntimeEntry {
 }
 
 async function snapshotWorkspaceFiles(runtime: RuntimeAdapter): Promise<WorkspaceFileEntry[]> {
+  if (runtime.snapshotFiles) {
+    return runtime.snapshotFiles();
+  }
   const paths = await runtime.listFiles("");
   return Promise.all(paths.map(async (path) => ({ path, content: await runtime.readFile(path) })));
 }

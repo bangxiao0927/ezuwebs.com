@@ -1,4 +1,8 @@
-import { type RemoteRuntimeConfigInput } from "@ezu/runtime-remote";
+import {
+  RemoteRuntimeConfigError,
+  type RemoteRuntimeConfigInput,
+  validateRemoteRuntimeSharedConfig,
+} from "@ezu/runtime-remote";
 
 export class RuntimeConfigError extends Error {}
 
@@ -84,20 +88,31 @@ export function resolveRuntimeProviderConfig(
   const commandTimeoutMs = parsePositiveIntEnv(env, "RUNTIME_REMOTE_COMMAND_TIMEOUT_MS");
   const pollIntervalMs = parsePositiveIntEnv(env, "RUNTIME_REMOTE_POLL_INTERVAL_MS");
 
-  return {
-    provider: "remote",
-    remote: {
-      baseUrl: requireEnv(env, "RUNTIME_REMOTE_BASE_URL"),
-      apiToken: requireEnv(env, "RUNTIME_REMOTE_TOKEN"),
-      image: requireEnv(env, "RUNTIME_REMOTE_IMAGE"),
-      profile: env.RUNTIME_REMOTE_PROFILE ?? "default",
-      previewBaseUrl: requireEnv(env, "RUNTIME_REMOTE_PREVIEW_BASE_URL"),
-      networkEgressDeny: true,
-      allowInsecureLoopback: env.RUNTIME_REMOTE_ALLOW_INSECURE_LOOPBACK === "true",
-      ...(connectTimeoutMs === undefined ? {} : { connectTimeoutMs }),
-      ...(readTimeoutMs === undefined ? {} : { readTimeoutMs }),
-      ...(commandTimeoutMs === undefined ? {} : { commandTimeoutMs }),
-      ...(pollIntervalMs === undefined ? {} : { pollIntervalMs }),
-    },
+  const remote: RemoteRuntimeSharedConfig = {
+    baseUrl: requireEnv(env, "RUNTIME_REMOTE_BASE_URL"),
+    apiToken: requireEnv(env, "RUNTIME_REMOTE_TOKEN"),
+    image: requireEnv(env, "RUNTIME_REMOTE_IMAGE"),
+    profile: env.RUNTIME_REMOTE_PROFILE ?? "default",
+    previewBaseUrl: requireEnv(env, "RUNTIME_REMOTE_PREVIEW_BASE_URL"),
+    networkEgressDeny: true,
+    allowInsecureLoopback: env.RUNTIME_REMOTE_ALLOW_INSECURE_LOOPBACK === "true",
+    ...(connectTimeoutMs === undefined ? {} : { connectTimeoutMs }),
+    ...(readTimeoutMs === undefined ? {} : { readTimeoutMs }),
+    ...(commandTimeoutMs === undefined ? {} : { commandTimeoutMs }),
+    ...(pollIntervalMs === undefined ? {} : { pollIntervalMs }),
   };
+
+  // Fails fast, before the server ever listens, on a bad baseUrl/token/image
+  // or any other shared runtime-remote setting rather than surfacing the
+  // error only on a session's first runtime creation.
+  try {
+    validateRemoteRuntimeSharedConfig(remote);
+  } catch (error) {
+    if (error instanceof RemoteRuntimeConfigError) {
+      throw new RuntimeConfigError(error.message);
+    }
+    throw error;
+  }
+
+  return { provider: "remote", remote };
 }

@@ -124,7 +124,19 @@ function requirePositive(fieldName: string, value: number): number {
   return value;
 }
 
-export function validateRemoteRuntimeConfig(input: RemoteRuntimeConfigInput): RemoteRuntimeConfig {
+/** The shared, per-deployment part of a {@link RemoteRuntimeConfigInput}; sessionId and projectId are supplied per session and validated separately by {@link validateRemoteRuntimeConfig}. */
+export type RemoteRuntimeSharedConfigInput = Omit<RemoteRuntimeConfigInput, "sessionId" | "projectId">;
+
+/** The validated, normalized form of a {@link RemoteRuntimeSharedConfigInput}. */
+export type RemoteRuntimeSharedConfig = Omit<RemoteRuntimeConfig, "sessionId" | "projectId">;
+
+/**
+ * Validates and normalizes every part of a remote runtime config except
+ * sessionId/projectId, so a deployment can fail fast on a bad baseUrl,
+ * apiToken, image, profile, or timeout/limit setting before any session
+ * ever tries to create a runtime.
+ */
+export function validateRemoteRuntimeSharedConfig(input: RemoteRuntimeSharedConfigInput): RemoteRuntimeSharedConfig {
   const allowInsecureLoopback = input.allowInsecureLoopback ?? false;
 
   const baseUrl = validateUrl("baseUrl", input.baseUrl, allowInsecureLoopback);
@@ -135,8 +147,6 @@ export function validateRemoteRuntimeConfig(input: RemoteRuntimeConfigInput): Re
   return {
     baseUrl,
     apiToken: requireNonBlank("apiToken", input.apiToken),
-    sessionId: requireNonBlank("sessionId", input.sessionId),
-    projectId: requireNonBlank("projectId", input.projectId),
     image: requireNonBlank("image", input.image),
     profile: requireNonBlank("profile", input.profile),
     connectTimeoutMs: requirePositive("connectTimeoutMs", input.connectTimeoutMs ?? defaultConnectTimeoutMs),
@@ -147,5 +157,14 @@ export function validateRemoteRuntimeConfig(input: RemoteRuntimeConfigInput): Re
     networkEgressDeny: input.networkEgressDeny ?? true,
     ...(previewBaseUrl ? { previewBaseUrl } : {}),
     allowInsecureLoopback,
+  };
+}
+
+export function validateRemoteRuntimeConfig(input: RemoteRuntimeConfigInput): RemoteRuntimeConfig {
+  const shared = validateRemoteRuntimeSharedConfig(input);
+  return {
+    ...shared,
+    sessionId: requireNonBlank("sessionId", input.sessionId),
+    projectId: requireNonBlank("projectId", input.projectId),
   };
 }

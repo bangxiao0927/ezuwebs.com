@@ -257,12 +257,21 @@ export async function startFakeWorkerServer(options: FakeWorkerServerOptions = {
         return;
       }
 
+      if (subpath === "/files/snapshot" && method === "GET") {
+        const files = [...runtime.files.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([path, content]) => ({ path, content }));
+        sendJson(response, 200, { files });
+        return;
+      }
+
       if (subpath === "/commands" && method === "POST") {
         commandCounter += 1;
         const commandId = `command-${commandCounter}`;
         const body = parsedBody as { argv: string[] };
         const hang = body.argv.includes("RUNTIME_TEST_HANG");
         const shouldFail = body.argv[0] === "fail";
+        const immediateExit = body.argv.includes("RUNTIME_TEST_IMMEDIATE_EXIT");
         const command: FakeCommand = {
           argv: body.argv,
           status: "running",
@@ -270,7 +279,11 @@ export async function startFakeWorkerServer(options: FakeWorkerServerOptions = {
           hang,
         };
         runtime.commands.set(commandId, command);
-        if (!hang) {
+        if (immediateExit) {
+          command.exitCode = 3;
+          command.status = "exited";
+          command.events.push({ seq: command.events.length + 1, type: "exit", code: command.exitCode });
+        } else if (!hang) {
           setTimeout(() => {
             if (command.status !== "running") {
               return;
@@ -289,7 +302,11 @@ export async function startFakeWorkerServer(options: FakeWorkerServerOptions = {
             });
           }, 10);
         }
-        sendJson(response, 201, { commandId, status: command.status });
+        sendJson(response, 201, {
+          commandId,
+          status: command.status,
+          ...(command.exitCode === undefined ? {} : { exitCode: command.exitCode }),
+        });
         return;
       }
 

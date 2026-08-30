@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { validateRemoteRuntimeConfig } from "./config.js";
+import { validateRemoteRuntimeConfig, validateRemoteRuntimeSharedConfig } from "./config.js";
 import { RemoteRuntimeConfigError } from "./errors.js";
 
 function baseConfig() {
@@ -105,4 +105,33 @@ test("validateRemoteRuntimeConfig validates previewBaseUrl with the same scheme 
     previewBaseUrl: "https://preview.example.com",
   });
   assert.equal(config.previewBaseUrl, "https://preview.example.com");
+});
+
+function baseSharedConfig() {
+  const { sessionId, projectId, ...shared } = baseConfig();
+  return shared;
+}
+
+test("validateRemoteRuntimeSharedConfig accepts a well-formed shared config without sessionId/projectId", () => {
+  const config = validateRemoteRuntimeSharedConfig(baseSharedConfig());
+
+  assert.equal(config.baseUrl, "https://sandbox.example.com/internal");
+  assert.equal(config.image, "node20");
+  assert.equal("sessionId" in config, false);
+  assert.equal("projectId" in config, false);
+});
+
+test("validateRemoteRuntimeSharedConfig rejects a bad baseUrl, blank token, and blank image, same as the full validator", () => {
+  assert.throws(
+    () => validateRemoteRuntimeSharedConfig({ ...baseSharedConfig(), baseUrl: "http://sandbox.example.com" }),
+    RemoteRuntimeConfigError,
+  );
+  assert.throws(
+    () => validateRemoteRuntimeSharedConfig({ ...baseSharedConfig(), apiToken: "" }),
+    RemoteRuntimeConfigError,
+  );
+  assert.throws(
+    () => validateRemoteRuntimeSharedConfig({ ...baseSharedConfig(), image: "" }),
+    RemoteRuntimeConfigError,
+  );
 });

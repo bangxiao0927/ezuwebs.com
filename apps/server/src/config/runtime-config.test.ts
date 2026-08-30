@@ -69,3 +69,23 @@ test("resolveRuntimeProviderConfig rejects an unknown RUNTIME_PROVIDER value", (
     RuntimeConfigError,
   );
 });
+
+test("resolveRuntimeProviderConfig rejects a non-https base URL before the server ever listens", () => {
+  assert.throws(
+    () =>
+      resolveRuntimeProviderConfig(remoteEnv({ RUNTIME_REMOTE_BASE_URL: "http://sandbox.internal.example.com" }), {
+        billingEnabled: true,
+      }),
+    RuntimeConfigError,
+  );
+});
+
+test("resolveRuntimeProviderConfig rejects a malformed preview base URL before the server ever listens", () => {
+  assert.throws(
+    () =>
+      resolveRuntimeProviderConfig(remoteEnv({ RUNTIME_REMOTE_PREVIEW_BASE_URL: "not-a-url" }), {
+        billingEnabled: true,
+      }),
+    RuntimeConfigError,
+  );
+});

@@ -350,3 +350,81 @@ test("two adapters for different sessions never see each other's files", async (
   assert.equal(await adapterA.readFile("shared.txt"), "session-a content");
   assert.equal(await adapterB.readFile("shared.txt"), "session-b content");
 });
+
+test("onExit called after the process has already exited still notifies the late listener", async () => {
+  const adapter = createRemoteRuntimeAdapter(baseConfig(worker));
+
+  const process = await adapter.runCommand("pnpm build");
+  const firstExitCode = await new Promise<number>((resolve) => process.onExit(resolve));
+  assert.equal(firstExitCode, 0);
+
+  const lateExitCode = await new Promise<number>((resolve) => process.onExit(resolve));
+  assert.equal(lateExitCode, 0);
+});
+
+test("runCommand settles the process immediately using the exit code in the worker's create response", async () => {
+  const adapter = createRemoteRuntimeAdapter(baseConfig(worker));
+
+  const process = await adapter.runCommand("echo RUNTIME_TEST_IMMEDIATE_EXIT");
+  const exitCode = await new Promise<number>((resolve) => process.onExit(resolve));
+
+  assert.equal(exitCode, 3);
+  const eventCalls = worker.requests.filter((request) => request.path.endsWith("/events"));
+  assert.equal(eventCalls.length, 0, "an already-exited command must not need to poll for its own events");
+});
+
+test("snapshotFiles fetches every file from the worker in a single request", async () => {
+  const adapter = createRemoteRuntimeAdapter(baseConfig(worker));
+  await adapter.writeFile("a.txt", "content-a");
+  await adapter.writeFile("b.txt", "content-b");
+
+  const requestCountBefore = worker.requests.length;
+  const files = await adapter.snapshotFiles!();
+
+  assert.deepEqual(files, [
+    { path: "a.txt", content: "content-a" },
+    { path: "b.txt", content: "content-b" },
+  ]);
+  const snapshotCalls = worker.requests.slice(requestCountBefore).filter((request) => request.path.endsWith("/files/snapshot"));
+  assert.equal(snapshotCalls.length, 1, "the snapshot must be fetched in exactly one request");
+});
+
+test("snapshotFiles rejects a worker response exceeding the configured file count limit", async () => {
+  await worker.close();
+  worker = await startFakeWorkerServer({
+    overrideResponseBodyOnPath: (method, path) =>
+      method === "GET" && path.endsWith("/files/snapshot")
+        ? { files: [{ path: "a.txt", content: "a" }, { path: "b.txt", content: "b" }] }
+        : undefined,
+  });
+  const adapter = createRemoteRuntimeAdapter(baseConfig(worker, { limits: { maxFileCount: 1 } }));
+
+  await assert.rejects(adapter.snapshotFiles!(), RemoteRuntimeValidationError);
+});
+
+test("a poll generation guard prevents a stale in-flight poll from doubling the shared poll loop after an unsubscribe/resubscribe race", async () => {
+  await worker.close();
+  worker = await startFakeWorkerServer({ responseDelayMs: 40 });
+  const adapter = createRemoteRuntimeAdapter(baseConfig(worker, { pollIntervalMs: 15 }));
+  await adapter.listFiles(""); // create the runtime outside the timing-sensitive window below
+
+  const eventsA: Array<{ path: string; type: string }> = [];
+  const eventsB: Array<{ path: string; type: string }> = [];
+
+  const unsubscribeA = await adapter.watchFiles((event) => eventsA.push(event));
+  await new Promise((resolve) => setTimeout(resolve, 10)); // let the first poll's request start
+
+  unsubscribeA();
+  const unsubscribeB = await adapter.watchFiles((event) => eventsB.push(event));
+  await adapter.writeFile("a.txt", "content");
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  unsubscribeB();
+
+  assert.deepEqual(eventsA, []);
+  assert.deepEqual(
+    eventsB,
+    [{ path: "a.txt", type: "write" }],
+    "a stale poll chain from before the resubscribe must never dispatch a second, duplicate event",
+  );
+});
