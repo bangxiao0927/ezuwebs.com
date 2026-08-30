@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { openDatabase } from "./client.js";
+import { createUser } from "./users.js";
 import {
   createSessionRow,
   getSessionRowBundle,
@@ -293,6 +294,9 @@ test("listSessionSummariesForOwner returns only id and definitionId for sessions
     t.skip("better-sqlite3 native binding is unavailable in this environment");
     return;
   }
+
+  createUser(db, { id: "user-a", email: "user-a@example.test" });
+  createUser(db, { id: "user-b", email: "user-b@example.test" });
 
   createSessionRow(db, {
     id: "session-owned",
