@@ -199,19 +199,17 @@ export type OwnedSessionSummary = Pick<
 >;
 
 export async function listSessionsForOwner(ownerUserId: string): Promise<OwnedSessionSummary[]> {
-  const records = await sessionRepository.list();
-  return records
-    .filter((record) => record.ownerUserId === ownerUserId)
-    .map((record) => {
-      const definition = getDemoSessionDefinition(record.definitionId);
-      return {
-        id: record.id,
-        projectName: definition.projectName,
-        description: definition.description,
-        taskTitle: definition.taskTitle,
-        taskTimestamp: definition.taskTimestamp,
-      };
-    });
+  const summaries = await sessionRepository.listSummariesForOwner(ownerUserId);
+  return summaries.map((summary) => {
+    const definition = getDemoSessionDefinition(summary.definitionId);
+    return {
+      id: summary.id,
+      projectName: definition.projectName,
+      description: definition.description,
+      taskTitle: definition.taskTitle,
+      taskTimestamp: definition.taskTimestamp,
+    };
+  });
 }
 
 export async function getSessionWorkspaceFiles(

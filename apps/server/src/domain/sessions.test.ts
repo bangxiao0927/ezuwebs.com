@@ -59,6 +59,7 @@ function asDurableStore(repository: SessionRepository): SessionRepository {
       const records = await repository.list();
       return records.map((record) => structuredClone(record));
     },
+    listSummariesForOwner: (ownerUserId) => repository.listSummariesForOwner(ownerUserId),
     recoverInterruptedSessions: () => repository.recoverInterruptedSessions(),
   };
 }

@@ -29,6 +29,20 @@
       "when": 1788040184835,
       "tag": "0003_conscious_triathlon",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788046441705,
+      "tag": "0004_productive_human_cannonball",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788048108100,
+      "tag": "0005_big_omega_flight",
+      "breakpoints": true
     }
   ]
 }

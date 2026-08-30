@@ -24,11 +24,13 @@ export interface OpenDatabaseOptions {
   runMigrations?: boolean;
 }
 
+export type EzuDbWithClient = EzuDb & { $client: Database.Database };
+
 /**
  * Opens a SQLite database and returns a Drizzle client.
  * Ensures parent directory exists for file-backed databases.
  */
-export function openDatabase(options: OpenDatabaseOptions = {}): EzuDb {
+export function openDatabase(options: OpenDatabaseOptions = {}): EzuDbWithClient {
   const databaseUrl = options.databaseUrl ?? process.env["DATABASE_URL"] ?? "file:./data/local.db";
   const filePath = resolveSqliteFilePath(databaseUrl);
 
