@@ -254,6 +254,7 @@ test("createSqliteSessionRepository lists owner-scoped summaries without hydrati
   const { repository, db } = testRepository;
   const { createUser, createSessionRow } = await import("@ezu/db");
   const owner = createUser(db, { email: "owner@example.com" });
+  const otherOwner = createUser(db, { email: "other-owner@example.com" });
 
   const owned = makeRecord("session-11", []);
   owned.ownerUserId = owner.id;
@@ -263,7 +264,7 @@ test("createSqliteSessionRepository lists owner-scoped summaries without hydrati
   // throw if a summary listing ever parsed them.
   createSessionRow(db, {
     id: "session-12",
-    ownerUserId: "user-b",
+    ownerUserId: otherOwner.id,
     definitionId: "club-promo",
     projectId: "project-1",
     bootstrapJson: "{ not valid json",
