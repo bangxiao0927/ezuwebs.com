@@ -1,0 +1,28 @@
+# Builds and runs the @ezu/runtime-worker HTTP service. This image is the
+# only thing that should ever have access to a docker socket (rootless);
+# it must never be co-located with, or reachable directly by, an
+# unauthenticated client. See apps/runtime-worker/README.md for the full
+# deployment and threat model.
+FROM node:22-bookworm-slim AS build
+WORKDIR /repo
+RUN corepack enable
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY apps/runtime-worker/package.json apps/runtime-worker/package.json
+COPY tsconfig.base.json tsconfig.json ./
+RUN pnpm install --frozen-lockfile --filter @ezu/runtime-worker...
+COPY apps/runtime-worker apps/runtime-worker
+
+FROM node:22-bookworm-slim AS runtime
+RUN groupadd --gid 10001 runtimeworker && useradd --uid 10001 --gid 10001 --create-home runtimeworker
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends docker.io \
+  && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=build /repo/node_modules ./node_modules
+COPY --from=build /repo/apps/runtime-worker ./apps/runtime-worker
+COPY --from=build /repo/tsconfig.base.json /repo/tsconfig.json ./
+WORKDIR /app/apps/runtime-worker
+USER runtimeworker
+ENV WORKER_HOST=0.0.0.0
+EXPOSE 4180
+ENTRYPOINT ["node", "--import", "tsx", "src/main.ts"]

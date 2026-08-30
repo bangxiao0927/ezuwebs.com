@@ -1,0 +1,47 @@
+# Example deployment of the runtime worker against a *rootless* docker
+# daemon. Do not point WORKER_DOCKER_BIN at a rootful daemon's socket:
+# `startRuntimeWorker` refuses to start unless `docker info` reports
+# `name=rootless` in SecurityOptions (see apps/runtime-worker/README.md).
+#
+# Threat model note: mounting *any* docker socket into a container that
+# accepts network input is a real privilege-escalation risk even when the
+# daemon is rootless (rootless still gives that uid the ability to create
+# and manage its own containers). Restrict network access to this worker
+# to the trusted @ezu/server process only, never to the public internet.
+services:
+  rootless-dockerd:
+    image: docker:27-dind-rootless
+    privileged: false
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - rootless-docker-data:/home/rootless/.local/share/docker
+    # Exposes the rootless daemon's socket to sibling containers on this
+    # compose network only; never publish this port externally.
+    expose:
+      - "2375"
+
+  runtime-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime-worker
+    depends_on:
+      - rootless-dockerd
+    environment:
+      WORKER_HOST: "0.0.0.0"
+      PORT: "4180"
+      WORKER_API_TOKEN: "${WORKER_API_TOKEN:?set a 32+ char random token}"
+      WORKER_ROOT: "/var/lib/runtime-worker"
+      WORKER_PUBLIC_PREVIEW_BASE_URL: "https://preview.example.com"
+      WORKER_ALLOWED_IMAGES: "ezu/sandbox:frontend"
+      WORKER_DOCKER_BIN: "/usr/bin/docker"
+      DOCKER_HOST: "tcp://rootless-dockerd:2375"
+      WORKER_REQUIRE_ROOTLESS: "true"
+    volumes:
+      - runtime-worker-data:/var/lib/runtime-worker
+    ports:
+      - "127.0.0.1:4180:4180"
+
+volumes:
+  rootless-docker-data:
+  runtime-worker-data:
