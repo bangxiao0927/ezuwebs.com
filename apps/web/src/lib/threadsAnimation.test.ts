@@ -28,6 +28,20 @@ test("no reduced motion with webgl available animates continuously", () => {
   );
 });
 
+test("a forced-animate hero treats reduced motion as no-preference so it keeps animating", () => {
+  // The caller collapses `prefersReducedMotion && !forceAnimate` before calling
+  // this pure function, so a forced-animate background passes false here.
+  const prefersReducedMotion = true;
+  const forceAnimate = true;
+  assert.equal(
+    resolveThreadsRenderMode({
+      webglAvailable: true,
+      prefersReducedMotion: prefersReducedMotion && !forceAnimate,
+    }),
+    "animated",
+  );
+});
+
 test("a running clock accumulates elapsed seconds from its start time", () => {
   const clock = new PausableClock(1_000, true);
 

@@ -101,6 +101,26 @@ button:disabled {
   gap: 32px;
 }
 
+/* Full-screen entry hero (home landing). */
+.home-hero {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+}
+
+.home-hero .home-hero-inner {
+  min-height: 100vh;
+  min-height: 100dvh;
+  border: 0;
+  border-radius: 0;
+  padding: clamp(24px, 6vw, 72px);
+  box-shadow: none;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(106, 91, 255, 0.22), transparent 60%),
+    radial-gradient(circle at bottom right, rgba(90, 200, 255, 0.12), transparent 55%),
+    #04060c;
+}
+
 .launcher-hero {
   position: relative;
   overflow: hidden;
