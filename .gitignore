@@ -1,6 +1,9 @@
 node_modules
 dist
 .DS_Store
+.env
+.env.*
+!.env.example
 *.db
 *.db-wal
 *.db-shm
