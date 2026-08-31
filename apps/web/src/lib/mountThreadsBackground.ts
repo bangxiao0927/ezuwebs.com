@@ -218,6 +218,7 @@ export function mountThreadsBackground(
   gl.uniform1f(distanceLocation, 0);
   gl.uniform2f(mouseLocation, 0.5, 0.5);
 
+  let redrawAfterResize: (() => void) | undefined;
   const resize = () => {
     const width = Math.max(1, Math.floor(target.clientWidth));
     const height = Math.max(1, Math.floor(target.clientHeight));
@@ -229,6 +230,7 @@ export function mountThreadsBackground(
     canvas.style.height = `${height}px`;
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.uniform3f(resolutionLocation, canvas.width, canvas.height, canvas.width / canvas.height);
+    redrawAfterResize?.();
   };
 
   resize();
@@ -254,8 +256,9 @@ export function mountThreadsBackground(
     targetMouseY = 0.5;
   };
 
-  target.addEventListener("pointermove", handlePointerMove, { passive: true });
-  target.addEventListener("pointerleave", handlePointerLeave, { passive: true });
+  const pointerTarget = target.parentElement ?? target;
+  pointerTarget.addEventListener("pointermove", handlePointerMove, { passive: true });
+  pointerTarget.addEventListener("pointerleave", handlePointerLeave, { passive: true });
 
   const prefersReducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
   let isDocumentVisible = !document.hidden;
@@ -278,6 +281,7 @@ export function mountThreadsBackground(
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   };
+  redrawAfterResize = () => drawFrame(performance.now());
 
   const renderFrame = (nowMs: number) => {
     drawFrame(nowMs);
@@ -308,8 +312,8 @@ export function mountThreadsBackground(
 
   const handleReducedMotionChange = () => {
     if (currentRenderMode() === "animated") {
-      clock.resume(performance.now());
       if (isDocumentVisible) {
+        clock.resume(performance.now());
         frameId = requestAnimationFrame(renderFrame);
       }
     } else {
@@ -326,8 +330,8 @@ export function mountThreadsBackground(
     cancelAnimationFrame(frameId);
     resizeObserver.disconnect();
     window.removeEventListener("resize", resize);
-    target.removeEventListener("pointermove", handlePointerMove);
-    target.removeEventListener("pointerleave", handlePointerLeave);
+    pointerTarget.removeEventListener("pointermove", handlePointerMove);
+    pointerTarget.removeEventListener("pointerleave", handlePointerLeave);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     prefersReducedMotionQuery.removeEventListener("change", handleReducedMotionChange);
     gl.deleteBuffer(geometryBuffer);
