@@ -3,6 +3,10 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 
 import { mountThreadsBackground } from "../lib/mountThreadsBackground";
 
+const props = withDefaults(defineProps<{ forceAnimate?: boolean }>(), {
+  forceAnimate: false,
+});
+
 const container = ref<HTMLDivElement | null>(null);
 const fallback = ref(false);
 
@@ -12,6 +16,7 @@ onMounted(() => {
   const target = container.value;
   if (!target) return;
   cleanup = mountThreadsBackground(target, {
+    forceAnimate: props.forceAnimate,
     onFallback: () => {
       fallback.value = true;
     },

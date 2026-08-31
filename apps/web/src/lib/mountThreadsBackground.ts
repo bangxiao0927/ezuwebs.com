@@ -155,6 +155,12 @@ function createProgram(gl: WebGLRenderingContext): WebGLProgram {
 
 export interface MountThreadsBackgroundOptions {
   onFallback: () => void;
+  /**
+   * When true, the decorative background keeps animating even if the OS
+   * reports `prefers-reduced-motion`. It still pauses on a hidden tab.
+   * Defaults to false so accessibility preferences are respected elsewhere.
+   */
+  forceAnimate?: boolean;
 }
 
 /**
@@ -261,16 +267,17 @@ export function mountThreadsBackground(
   pointerTarget.addEventListener("pointerleave", handlePointerLeave, { passive: true });
 
   const prefersReducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const respectsReducedMotion = () => prefersReducedMotionQuery.matches && !options.forceAnimate;
   let isDocumentVisible = !document.hidden;
   const clock = new PausableClock(
     performance.now(),
-    isDocumentVisible && !prefersReducedMotionQuery.matches,
+    isDocumentVisible && !respectsReducedMotion(),
   );
 
   let frameId = 0;
 
   const currentRenderMode = () =>
-    resolveThreadsRenderMode({ webglAvailable: true, prefersReducedMotion: prefersReducedMotionQuery.matches });
+    resolveThreadsRenderMode({ webglAvailable: true, prefersReducedMotion: respectsReducedMotion() });
 
   const drawFrame = (nowMs: number) => {
     gl.useProgram(program);

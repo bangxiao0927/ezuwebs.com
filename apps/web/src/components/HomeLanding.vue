@@ -36,9 +36,9 @@ async function signOut(): Promise<void> {
 </script>
 
 <template>
-  <main class="launcher">
-    <header class="launcher-hero">
-      <ThreadsBackground class="launcher-hero-threads" />
+  <main class="home-hero">
+    <header class="launcher-hero home-hero-inner">
+      <ThreadsBackground class="launcher-hero-threads" :force-animate="true" />
       <div class="launcher-auth">
         <span v-if="authLoading" class="launcher-auth-status">Checking sign-in…</span>
         <template v-else-if="user">
