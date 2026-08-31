@@ -285,6 +285,12 @@ button:disabled {
   gap: 18px;
 }
 
+.select-section {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+
 .session-card {
   display: grid;
   gap: 8px;
