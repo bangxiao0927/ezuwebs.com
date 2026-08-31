@@ -2,9 +2,8 @@
 import { onMounted, ref } from "vue";
 
 import { createSession, getCurrentUser, googleSignInUrl, listSessions, logout } from "../api";
-import { navigateToDashboard, navigateToSession } from "../router";
+import { navigateHome, navigateToDashboard, navigateToSession } from "../router";
 import type { AuthUser, SessionSummary } from "../types";
-import ThreadsBackground from "./ThreadsBackground.vue";
 
 const sessions = ref<SessionSummary[]>([]);
 const loading = ref(true);
@@ -61,10 +60,14 @@ async function open(session: SessionSummary): Promise<void> {
 </script>
 
 <template>
-  <main class="launcher">
-    <header class="launcher-hero">
-      <ThreadsBackground class="launcher-hero-threads" />
-      <div class="launcher-auth">
+  <main class="select">
+    <header class="select-header">
+      <button type="button" class="ghost-button" @click="navigateHome">&larr; Home</button>
+      <div class="select-heading">
+        <p class="eyebrow">Choose a workspace</p>
+        <h1>Start a session</h1>
+      </div>
+      <div class="launcher-auth launcher-auth-static">
         <span v-if="authLoading" class="launcher-auth-status">Checking sign-in…</span>
         <template v-else-if="user">
           <span class="launcher-auth-status">Signed in as {{ user.name ?? user.email }}</span>
@@ -74,14 +77,6 @@ async function open(session: SessionSummary): Promise<void> {
         <button v-else type="button" class="launcher-auth-button" @click="signInWithGoogle">
           Sign in with Google
         </button>
-      </div>
-      <div class="launcher-hero-copy">
-        <p class="eyebrow">Threads Homepage</p>
-        <h1>ezuwebs.com</h1>
-        <p class="lede">
-          AI based web IDE for building, previewing, and sharing web projects workspace.
-        </p>
-        <p class="launcher-meta">Make your own websites easier.</p>
       </div>
     </header>
 

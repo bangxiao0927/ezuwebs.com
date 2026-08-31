@@ -1,33 +1,14 @@
 import { onMounted, onUnmounted, ref } from "vue";
 
-export interface Route {
-  name: "launcher" | "session" | "dashboard" | "credits" | "usage";
-  sessionId?: string;
-}
+import { parseHash } from "./lib/hashRoute";
 
-function parseHash(): Route {
-  const hash = window.location.hash.replace(/^#/, "");
-  const match = /^\/session\/([^/?#]+)/.exec(hash);
-  if (match) {
-    return { name: "session", sessionId: decodeURIComponent(match[1]!) };
-  }
-  if (/^\/dashboard/.test(hash)) {
-    return { name: "dashboard" };
-  }
-  if (/^\/credits/.test(hash)) {
-    return { name: "credits" };
-  }
-  if (/^\/usage/.test(hash)) {
-    return { name: "usage" };
-  }
-  return { name: "launcher" };
-}
+export type { Route } from "./lib/hashRoute";
 
 export function useRoute() {
-  const route = ref<Route>(parseHash());
+  const route = ref(parseHash(window.location.hash));
 
   const update = () => {
-    route.value = parseHash();
+    route.value = parseHash(window.location.hash);
   };
 
   onMounted(() => window.addEventListener("hashchange", update));
@@ -42,6 +23,10 @@ export function navigateToSession(sessionId: string): void {
 
 export function navigateHome(): void {
   window.location.hash = "";
+}
+
+export function navigateToSelect(): void {
+  window.location.hash = "#/select";
 }
 
 export function navigateToDashboard(): void {

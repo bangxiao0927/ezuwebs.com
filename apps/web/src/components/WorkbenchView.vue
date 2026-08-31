@@ -18,7 +18,7 @@ import {
 import { classifyRequestOutcome, decideIdempotency } from "../lib/idempotency";
 import { initialPropertyValues, propertiesWithValues } from "../lib/propertyValues";
 import { applyRunEvent, createRunStreamState, type RunStreamState } from "../lib/runStream";
-import { navigateHome } from "../router";
+import { navigateToSelect } from "../router";
 import type { PatchStrategy, RunDto, Session, WorkspaceFile } from "../types";
 import ConversationColumn from "./ConversationColumn.vue";
 import WorkspaceColumn from "./WorkspaceColumn.vue";
@@ -351,7 +351,7 @@ async function handleAnswer(): Promise<void> {
   <main class="workspace" v-if="!loading && session && viewModel">
     <header class="topbar">
       <div class="topbar-left">
-        <button type="button" class="ghost-button" @click="navigateHome">← Sessions</button>
+        <button type="button" class="ghost-button" @click="navigateToSelect">← Sessions</button>
         <div class="topbar-title">
           <strong>{{ session.projectName }}</strong>
           <span>{{ session.taskTitle }} · {{ session.taskTimestamp }}</span>
@@ -411,6 +411,6 @@ async function handleAnswer(): Promise<void> {
 
   <main class="workspace-loading" v-else>
     <p class="error">{{ error ?? "Session unavailable." }}</p>
-    <button type="button" class="ghost-button" @click="navigateHome">← Back to sessions</button>
+    <button type="button" class="ghost-button" @click="navigateToSelect">← Back to sessions</button>
   </main>
 </template>
