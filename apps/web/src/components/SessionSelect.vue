@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
-import { createSession, getCurrentUser, googleSignInUrl, listSessions, logout } from "../api";
+import { createSession, getCurrentUser, getDashboard, googleSignInUrl, listSessions, logout } from "../api";
 import { navigateHome, navigateToDashboard, navigateToSession } from "../router";
-import type { AuthUser, SessionSummary } from "../types";
+import { recentProjects } from "../lib/recentProjects";
+import type { AuthUser, DashboardProject, SessionSummary } from "../types";
 
 const sessions = ref<SessionSummary[]>([]);
 const loading = ref(true);
@@ -11,6 +12,8 @@ const error = ref<string | undefined>();
 const openingId = ref<string | undefined>();
 const user = ref<AuthUser | null>(null);
 const authLoading = ref(true);
+const projects = ref<DashboardProject[]>([]);
+const resumeProjects = computed(() => recentProjects(projects.value));
 
 onMounted(async () => {
   try {
@@ -28,6 +31,14 @@ onMounted(async () => {
   } finally {
     authLoading.value = false;
   }
+
+  if (user.value) {
+    try {
+      projects.value = (await getDashboard()).projects;
+    } catch {
+      projects.value = [];
+    }
+  }
 });
 
 function signInWithGoogle(): void {
@@ -39,6 +50,7 @@ async function signOut(): Promise<void> {
   try {
     await logout();
     user.value = null;
+    projects.value = [];
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Failed to sign out";
   }
@@ -56,6 +68,10 @@ async function open(session: SessionSummary): Promise<void> {
   } finally {
     openingId.value = undefined;
   }
+}
+
+function resume(project: DashboardProject): void {
+  navigateToSession(project.id);
 }
 </script>
 
@@ -83,21 +99,44 @@ async function open(session: SessionSummary): Promise<void> {
     <p v-if="loading" class="launcher-status">Loading sessions…</p>
     <p v-else-if="error" class="launcher-status error">{{ error }}</p>
 
-    <section v-else class="session-grid">
-      <button
-        v-for="session in sessions"
-        :key="session.id"
-        type="button"
-        class="session-card"
-        :disabled="Boolean(openingId)"
-        @click="open(session)"
-      >
-        <span class="session-card-title">{{ session.title }}</span>
-        <span class="session-card-project">{{ session.projectName }}</span>
-        <span class="session-card-description">{{ session.description }}</span>
-        <span class="session-card-meta">{{ session.taskTimestamp }}</span>
-        <span v-if="openingId === session.id" class="session-card-meta">Opening…</span>
-      </button>
-    </section>
+    <template v-else>
+      <section v-if="resumeProjects.length > 0" class="select-section">
+        <p class="eyebrow">Your recent projects</p>
+        <div class="session-grid">
+          <button
+            v-for="project in resumeProjects"
+            :key="project.id"
+            type="button"
+            class="session-card"
+            @click="resume(project)"
+          >
+            <span class="session-card-title">{{ project.projectName }}</span>
+            <span class="session-card-project">{{ project.taskTitle }}</span>
+            <span class="session-card-description">{{ project.description }}</span>
+            <span class="session-card-meta">Resume · {{ project.taskTimestamp }}</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="select-section">
+        <p v-if="resumeProjects.length > 0" class="eyebrow">Start something new</p>
+        <div class="session-grid">
+          <button
+            v-for="session in sessions"
+            :key="session.id"
+            type="button"
+            class="session-card"
+            :disabled="Boolean(openingId)"
+            @click="open(session)"
+          >
+            <span class="session-card-title">{{ session.title }}</span>
+            <span class="session-card-project">{{ session.projectName }}</span>
+            <span class="session-card-description">{{ session.description }}</span>
+            <span class="session-card-meta">{{ session.taskTimestamp }}</span>
+            <span v-if="openingId === session.id" class="session-card-meta">Opening…</span>
+          </button>
+        </div>
+      </section>
+    </template>
   </main>
 </template>
