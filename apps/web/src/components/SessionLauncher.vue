@@ -4,6 +4,7 @@ import { onMounted, ref } from "vue";
 import { createSession, getCurrentUser, googleSignInUrl, listSessions, logout } from "../api";
 import { navigateToDashboard, navigateToSession } from "../router";
 import type { AuthUser, SessionSummary } from "../types";
+import ThreadsBackground from "./ThreadsBackground.vue";
 
 const sessions = ref<SessionSummary[]>([]);
 const loading = ref(true);
@@ -62,6 +63,7 @@ async function open(session: SessionSummary): Promise<void> {
 <template>
   <main class="launcher">
     <header class="launcher-hero">
+      <ThreadsBackground class="launcher-hero-threads" />
       <div class="launcher-auth">
         <span v-if="authLoading" class="launcher-auth-status">Checking sign-in…</span>
         <template v-else-if="user">
@@ -73,12 +75,14 @@ async function open(session: SessionSummary): Promise<void> {
           Sign in with Google
         </button>
       </div>
-      <p class="eyebrow">ezuwebs.com</p>
-      <h1>AI Web Building Workspace</h1>
-      <p class="lede">
-        前后端分离架构：Vue 前端负责渲染会话工作台，Node 后端负责运行 agent、归并事件并生成预览。
-        选择一个 demo 会话进入工作台。
-      </p>
+      <div class="launcher-hero-copy">
+        <p class="eyebrow">Threads Homepage</p>
+        <h1>ezuwebs.com</h1>
+        <p class="lede">
+          AI based web IDE for building, previewing, and sharing web projects workspace.
+        </p>
+        <p class="launcher-meta">Make your own websites easier.</p>
+      </div>
     </header>
 
     <p v-if="loading" class="launcher-status">Loading sessions…</p>
