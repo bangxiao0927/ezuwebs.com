@@ -18,7 +18,7 @@ import {
 import { classifyRequestOutcome, decideIdempotency } from "../lib/idempotency";
 import { initialPropertyValues, propertiesWithValues } from "../lib/propertyValues";
 import { applyRunEvent, createRunStreamState, type RunStreamState } from "../lib/runStream";
-import { navigateToSelect } from "../router";
+import { navigateHome, navigateToSelect } from "../router";
 import type { PatchStrategy, RunDto, Session, WorkspaceFile } from "../types";
 import ConversationColumn from "./ConversationColumn.vue";
 import WorkspaceColumn from "./WorkspaceColumn.vue";
@@ -351,6 +351,10 @@ async function handleAnswer(): Promise<void> {
   <main class="workspace" v-if="!loading && session && viewModel">
     <header class="topbar">
       <div class="topbar-left">
+        <button type="button" class="topbar-brand" @click="navigateHome" aria-label="Go to home">
+          ezuwebs<span class="topbar-brand-dot">.com</span>
+        </button>
+        <span class="topbar-divider" aria-hidden="true"></span>
         <button type="button" class="ghost-button" @click="navigateToSelect">← Sessions</button>
         <div class="topbar-title">
           <strong>{{ session.projectName }}</strong>
