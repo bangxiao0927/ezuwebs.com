@@ -595,6 +595,29 @@ button:disabled {
   gap: 16px;
 }
 
+.topbar-brand {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  background: var(--gradient-brand);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.topbar-brand-dot {
+  opacity: 0.85;
+}
+
+.topbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--line-strong);
+}
+
 .topbar-title {
   display: grid;
 }
