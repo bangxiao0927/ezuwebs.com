@@ -2,8 +2,8 @@
 import { onMounted, ref } from "vue";
 
 import { getBillingSummary, grantDevCredits } from "../api";
-import { navigateHome, navigateToDashboard, navigateToUsage } from "../router";
 import type { BillingSummary } from "../types";
+import TopAppNav from "./TopAppNav.vue";
 
 const summary = ref<BillingSummary | null>(null);
 const loading = ref(true);
@@ -38,6 +38,7 @@ async function grant(packageId: string): Promise<void> {
 </script>
 
 <template>
+  <TopAppNav active="credits" />
   <main class="dashboard credits">
     <p v-if="loading" class="dashboard-status">Loading credits…</p>
     <p v-else-if="error" class="dashboard-status error">{{ error }}</p>
@@ -47,11 +48,6 @@ async function grant(packageId: string): Promise<void> {
         <div>
           <p class="dashboard-user-name">Credits</p>
           <p class="dashboard-user-plan">Balance: {{ summary.balance }}</p>
-        </div>
-        <div class="dashboard-header-actions">
-          <button type="button" class="dashboard-home-button" @click="navigateToUsage">Usage</button>
-          <button type="button" class="dashboard-home-button" @click="navigateToDashboard">Dashboard</button>
-          <button type="button" class="dashboard-home-button" @click="navigateHome">Back to launcher</button>
         </div>
       </header>
 

@@ -4,8 +4,8 @@ import { computed, onMounted, ref } from "vue";
 import { getBillingSummary, getUsage } from "../api";
 import { promptUsageLabel } from "../lib/usageDisplay";
 import { hasNextPage, nextOffset, previousOffset } from "../lib/usagePagination";
-import { navigateHome, navigateToCredits, navigateToDashboard } from "../router";
 import type { BillingSummary, UsagePage } from "../types";
+import TopAppNav from "./TopAppNav.vue";
 
 const balance = ref<BillingSummary | null>(null);
 const usage = ref<UsagePage | null>(null);
@@ -45,6 +45,7 @@ function previousPage(): void {
 </script>
 
 <template>
+  <TopAppNav active="usage" />
   <main class="dashboard usage">
     <p v-if="loading" class="dashboard-status">Loading usage…</p>
     <p v-else-if="error" class="dashboard-status error">{{ error }}</p>
@@ -56,11 +57,6 @@ function previousPage(): void {
           <p class="dashboard-user-plan">
             Balance: {{ balance.balance }} &middot; Total consumed: {{ usage.totalCreditsConsumed }}
           </p>
-        </div>
-        <div class="dashboard-header-actions">
-          <button type="button" class="dashboard-home-button" @click="navigateToCredits">Credits</button>
-          <button type="button" class="dashboard-home-button" @click="navigateToDashboard">Dashboard</button>
-          <button type="button" class="dashboard-home-button" @click="navigateHome">Back to launcher</button>
         </div>
       </header>
 

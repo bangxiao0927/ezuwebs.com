@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 
-import { createSession, getCurrentUser, getDashboard, googleSignInUrl, listSessions, logout } from "../api";
-import { navigateHome, navigateToDashboard, navigateToSession } from "../router";
+import { createSession, getCurrentUser, getDashboard, listSessions } from "../api";
+import { navigateToSession } from "../router";
 import { recentProjects } from "../lib/recentProjects";
 import type { AuthUser, DashboardProject, SessionSummary } from "../types";
+import TopAppNav from "./TopAppNav.vue";
 
 const sessions = ref<SessionSummary[]>([]);
 const loading = ref(true);
@@ -41,21 +42,6 @@ onMounted(async () => {
   }
 });
 
-function signInWithGoogle(): void {
-  window.location.href = googleSignInUrl();
-}
-
-async function signOut(): Promise<void> {
-  error.value = undefined;
-  try {
-    await logout();
-    user.value = null;
-    projects.value = [];
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Failed to sign out";
-  }
-}
-
 async function open(session: SessionSummary): Promise<void> {
   if (openingId.value) return;
   openingId.value = session.id;
@@ -76,23 +62,12 @@ function resume(project: DashboardProject): void {
 </script>
 
 <template>
+  <TopAppNav active="select" />
   <main class="select">
     <header class="select-header">
-      <button type="button" class="ghost-button" @click="navigateHome">&larr; Home</button>
       <div class="select-heading">
         <p class="eyebrow">Choose a workspace</p>
         <h1>Start a session</h1>
-      </div>
-      <div class="launcher-auth launcher-auth-static">
-        <span v-if="authLoading" class="launcher-auth-status">Checking sign-in…</span>
-        <template v-else-if="user">
-          <span class="launcher-auth-status">Signed in as {{ user.name ?? user.email }}</span>
-          <button type="button" class="launcher-auth-button" @click="navigateToDashboard">Dashboard</button>
-          <button type="button" class="launcher-auth-button" @click="signOut">Sign out</button>
-        </template>
-        <button v-else type="button" class="launcher-auth-button" @click="signInWithGoogle">
-          Sign in with Google
-        </button>
       </div>
     </header>
 

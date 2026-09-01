@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 
-import { getDashboard, logout } from "../api";
-import { navigateHome, navigateToCredits, navigateToSession, navigateToUsage } from "../router";
+import { getDashboard } from "../api";
+import { navigateToSession } from "../router";
 import type { Dashboard } from "../types";
+import TopAppNav from "./TopAppNav.vue";
 
 const dashboard = ref<Dashboard | null>(null);
 const loading = ref(true);
@@ -23,17 +24,13 @@ async function load(): Promise<void> {
 
 onMounted(load);
 
-async function signOut(): Promise<void> {
-  await logout();
-  navigateHome();
-}
-
 function openProject(projectId: string): void {
   navigateToSession(projectId);
 }
 </script>
 
 <template>
+  <TopAppNav active="dashboard" />
   <main class="dashboard">
     <p v-if="loading" class="dashboard-status">Loading dashboard…</p>
     <p v-else-if="error" class="dashboard-status error">{{ error }}</p>
@@ -43,12 +40,6 @@ function openProject(projectId: string): void {
         <div>
           <p class="dashboard-user-name">{{ dashboard.user.name ?? dashboard.user.email }}</p>
           <p class="dashboard-user-plan">Plan: {{ dashboard.user.plan }}</p>
-        </div>
-        <div class="dashboard-header-actions">
-          <button type="button" class="dashboard-home-button" @click="navigateToCredits">Credits</button>
-          <button type="button" class="dashboard-home-button" @click="navigateToUsage">Usage</button>
-          <button type="button" class="dashboard-home-button" @click="navigateHome">Back to launcher</button>
-          <button type="button" class="dashboard-signout-button" @click="signOut">Sign out</button>
         </div>
       </header>
 
