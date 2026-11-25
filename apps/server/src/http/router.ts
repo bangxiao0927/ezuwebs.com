@@ -9,6 +9,8 @@ import {
   resolveApproval,
   selectBlock,
   sendPrompt,
+  SessionDefinitionNotFoundError,
+  SessionNotFoundError,
 } from "../domain/sessions.js";
 
 type Handler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
@@ -17,21 +19,28 @@ interface JsonError {
   error: string;
 }
 
+const MAX_JSON_BODY_BYTES = 1024 * 1024;
+
+class RequestBodyTooLargeError extends Error {}
+
 function sendJson(response: ServerResponse, status: number, payload: unknown): void {
   const body = JSON.stringify(payload);
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
-    "access-control-allow-origin": "*",
-    "access-control-allow-headers": "content-type",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
   });
   response.end(body);
 }
 
 async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of request) {
-    chunks.push(chunk as Buffer);
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+    size += buffer.byteLength;
+    if (size > MAX_JSON_BODY_BYTES) {
+      throw new RequestBodyTooLargeError("Request body exceeds 1 MiB");
+    }
+    chunks.push(buffer);
   }
   const raw = Buffer.concat(chunks).toString("utf8").trim();
   if (!raw) {
@@ -46,11 +55,6 @@ export function createApiHandler(): Handler {
       const method = request.method ?? "GET";
       const url = new URL(request.url ?? "/", "http://localhost");
       const segments = url.pathname.split("/").filter(Boolean);
-
-      if (method === "OPTIONS") {
-        sendJson(response, 204, {});
-        return;
-      }
 
       // Health probe.
       if (segments.length === 1 && segments[0] === "api" && method === "GET") {
@@ -130,7 +134,11 @@ export function createApiHandler(): Handler {
 
         if (action === "approval" && method === "POST") {
           const body = await readJsonBody<{ decision?: string; reason?: string }>(request);
-          const decision = body.decision === "rejected" ? "rejected" : "approved";
+          if (body.decision !== "approved" && body.decision !== "rejected") {
+            sendJson(response, 400, { error: "A valid approval decision is required" } satisfies JsonError);
+            return;
+          }
+          const decision = body.decision;
           const session = await resolveApproval(
             sessionId,
             decision,
@@ -143,9 +151,24 @@ export function createApiHandler(): Handler {
 
       sendJson(response, 404, { error: "Not found" } satisfies JsonError);
     } catch (error) {
-      sendJson(response, 500, {
-        error: error instanceof Error ? error.message : "Internal server error",
-      } satisfies JsonError);
+      if (error instanceof SyntaxError) {
+        sendJson(response, 400, { error: "Request body must be valid JSON" } satisfies JsonError);
+        return;
+      }
+      if (error instanceof RequestBodyTooLargeError) {
+        sendJson(response, 413, { error: error.message } satisfies JsonError);
+        return;
+      }
+      if (error instanceof SessionNotFoundError) {
+        sendJson(response, 404, { error: error.message } satisfies JsonError);
+        return;
+      }
+      if (error instanceof SessionDefinitionNotFoundError) {
+        sendJson(response, 400, { error: error.message } satisfies JsonError);
+        return;
+      }
+      console.error("[ezu/server] Unhandled API error", error);
+      sendJson(response, 500, { error: "Internal server error" } satisfies JsonError);
     }
   };
 }

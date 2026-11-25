@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
 import {
   applyEdit,
@@ -26,7 +26,7 @@ const toast = ref<string | undefined>();
 const composer = ref("");
 const intent = ref("");
 const patchStrategy = ref<PatchStrategy>("refine");
-const propertyValues = reactive<Record<string, string>>({});
+const propertyValues = ref<Record<string, string>>({});
 const rejectReason = ref("");
 const viewMode = ref<"preview" | "code" | "diff">("preview");
 const activeFile = ref<string | undefined>();
@@ -35,12 +35,11 @@ const viewModel = computed(() => session.value?.viewModel ?? null);
 
 function syncFromSession(next: Session): void {
   session.value = next;
-  for (const key of Object.keys(propertyValues)) {
-    delete propertyValues[key];
-  }
+  const nextPropertyValues: Record<string, string> = {};
   for (const property of next.viewModel.webEditor.properties) {
-    propertyValues[property.key] = property.value;
+    nextPropertyValues[property.key] = property.value;
   }
+  propertyValues.value = nextPropertyValues;
   if (!activeFile.value && files.value.length > 0) {
     activeFile.value = files.value[0]?.path;
   }
@@ -58,6 +57,8 @@ function flashToast(message: string): void {
 async function load(): Promise<void> {
   loading.value = true;
   error.value = undefined;
+  files.value = [];
+  activeFile.value = undefined;
   try {
     const next = await createSession(props.definitionId);
     syncFromSession(next);
@@ -102,7 +103,7 @@ async function handleSubmitEdit(): Promise<void> {
   }
   const properties = session.value.viewModel.webEditor.properties.map((property) => ({
     ...property,
-    value: propertyValues[property.key] ?? property.value,
+    value: propertyValues.value[property.key] ?? property.value,
   }));
   const next = await run(() =>
     applyEdit(session.value!.id, {
@@ -172,14 +173,14 @@ async function handleApproval(decision: "approved" | "rejected"): Promise<void> 
       <WorkspaceColumn
         :view-model="viewModel"
         :files="files"
-       :busy="busy"
-       v-model:view-mode="viewMode"
-       v-model:active-file="activeFile"
-       v-model:intent="intent"
-       v-model:patch-strategy="patchStrategy"
-      v-model:property-values="propertyValues"
-       :on-select-block="handleSelectBlock"
-      :on-submit-edit="handleSubmitEdit"
+        :busy="busy"
+        v-model:view-mode="viewMode"
+        v-model:active-file="activeFile"
+        v-model:intent="intent"
+        v-model:patch-strategy="patchStrategy"
+        v-model:property-values="propertyValues"
+        :on-select-block="handleSelectBlock"
+        :on-submit-edit="handleSubmitEdit"
       />
     </section>
 

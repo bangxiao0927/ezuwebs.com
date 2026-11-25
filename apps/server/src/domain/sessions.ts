@@ -53,6 +53,21 @@ export interface SessionDto {
 }
 
 const sessions = new Map<string, SessionRecord>();
+const sessionCreations = new Map<string, Promise<SessionRecord>>();
+
+export class SessionNotFoundError extends Error {
+  constructor(sessionId: string) {
+    super(`Unknown session: ${sessionId}`);
+    this.name = "SessionNotFoundError";
+  }
+}
+
+export class SessionDefinitionNotFoundError extends Error {
+  constructor(definitionId: string) {
+    super(`Unknown session definition: ${definitionId}`);
+    this.name = "SessionDefinitionNotFoundError";
+  }
+}
 
 function definitionToSummary(definition: DemoSessionDefinition): SessionSummaryDto {
   return {
@@ -119,19 +134,40 @@ export function listSessionDefinitions(): SessionSummaryDto[] {
 }
 
 export async function createSession(definitionId: string): Promise<SessionDto> {
-  const definition = getDemoSessionDefinition(definitionId);
-  const bootstrap = await createDemoBootstrap(definition.id);
+  if (!listSessionDefinitions().some((definition) => definition.id === definitionId)) {
+    throw new SessionDefinitionNotFoundError(definitionId);
+  }
+  const sessionId = `${definitionId}-session`;
+  const existing = sessions.get(sessionId);
+  if (existing) {
+    return toDto(existing);
+  }
 
-  const record: SessionRecord = {
-    id: bootstrap.sessionId,
-    definitionId: definition.id,
-    bootstrap,
-    events: [...bootstrap.initialEvents],
-    webEditor: createInteractiveWebEditorState(bootstrap.webEditor),
-  };
+  let creation = sessionCreations.get(sessionId);
+  if (!creation) {
+    creation = (async () => {
+      const definition = getDemoSessionDefinition(definitionId);
+      const bootstrap = await createDemoBootstrap(definition.id);
+      const record: SessionRecord = {
+        id: bootstrap.sessionId,
+        definitionId: definition.id,
+        bootstrap,
+        events: [...bootstrap.initialEvents],
+        webEditor: createInteractiveWebEditorState(bootstrap.webEditor),
+      };
+      sessions.set(record.id, record);
+      return record;
+    })();
+    sessionCreations.set(sessionId, creation);
+  }
 
-  sessions.set(record.id, record);
-  return toDto(record);
+  try {
+    return toDto(await creation);
+  } finally {
+    if (sessionCreations.get(sessionId) === creation) {
+      sessionCreations.delete(sessionId);
+    }
+  }
 }
 
 async function ensureSession(sessionId: string): Promise<SessionRecord> {
@@ -141,11 +177,17 @@ async function ensureSession(sessionId: string): Promise<SessionRecord> {
   }
 
   // Recreate a session from its definition id when the store was reset.
-  const definitionId = sessionId.replace(/-session$/, "");
+  const definition = listSessionDefinitions().find(
+    (candidate) => `${candidate.id}-session` === sessionId,
+  );
+  if (!definition) {
+    throw new SessionNotFoundError(sessionId);
+  }
+  const definitionId = definition.id;
   await createSession(definitionId);
   const created = sessions.get(`${definitionId}-session`);
   if (!created) {
-    throw new Error(`Unknown session: ${sessionId}`);
+    throw new SessionNotFoundError(sessionId);
   }
   return created;
 }
@@ -225,14 +267,15 @@ export async function sendPrompt(sessionId: string, text: string): Promise<Sessi
     selectedEditor,
   );
   record.webEditor = response.nextState;
+  const messageId = `assistant-ui-${Date.now()}`;
   record.events.push({
     type: "message.delta",
-    messageId: `assistant-ui-${Date.now()}`,
+    messageId,
     text: `Queued prompt: ${text}`,
   });
   record.events.push({
     type: "message.completed",
-    messageId: `assistant-ui-${Date.now()}`,
+    messageId,
   });
 
   return toDto(record);
@@ -244,12 +287,20 @@ export async function resolveApproval(
   reason: string,
 ): Promise<SessionDto> {
   const record = await ensureSession(sessionId);
+  const resolvedInteractionIds = new Set(
+    record.events
+      .filter(
+        (event): event is Extract<AgentEvent, { type: "interaction.resolved" }> =>
+          event.type === "interaction.resolved",
+      )
+      .map((event) => event.interactionId),
+  );
   const pending = record.events
     .slice()
     .reverse()
     .find(
       (event): event is Extract<AgentEvent, { type: "interaction.required" }> =>
-        event.type === "interaction.required",
+        event.type === "interaction.required" && !resolvedInteractionIds.has(event.interaction.id),
     );
 
   if (!pending || pending.interaction.type !== "confirm") {
